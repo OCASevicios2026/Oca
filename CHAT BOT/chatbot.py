@@ -100,7 +100,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
             or normalized in ("0", "menu")
         ):
             return {
-                "replies": ["Entendido. ¿En que mas puedo ayudarte?\n\n" + build_menu()],
+                "replies": [build_menu()],
                 "state": "menu",
                 "customer_name": customer_name,
                 "lead": None,
