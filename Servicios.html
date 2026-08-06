@@ -285,6 +285,9 @@
   @media (max-width: 960px) {
     .proceso-grid { grid-template-columns: repeat(2, 1fr); }
     .footer-grid { grid-template-columns: 1fr; gap: 36px; }
+    nav { height: 84px; }
+    .nav-logo img { height: 120px; margin-top: 48px; }
+    nav.nav-scrolled .nav-logo img { height: 84px; }
   }
   @media (max-width: 860px) {
     .servicios-list { gap: 80px; }
@@ -294,10 +297,36 @@
     .nav-links { display: none; }
     .nav-cta { display: none; }
     .hamburger { display: block; }
+    .hero-servicios { padding: 140px 24px 60px; }
   }
   @media (max-width: 640px) {
     .proceso-grid { grid-template-columns: 1fr; }
-    .hero-servicios { min-height: 70vh; }
+    .hero-servicios { min-height: 70vh; padding: 120px 20px 56px; }
+    .hero-servicios h1 { font-size: 36px; }
+    .section { padding: 72px 20px; }
+    .section-title { font-size: 30px; }
+    .servicios-list { margin-top: 56px; gap: 64px; }
+    .apartado-num { font-size: 56px; }
+    .apartado-content h3 { font-size: 26px; }
+    .paso { padding: 28px 22px; }
+    .cta-section { padding: 80px 20px; }
+    .footer-grid { gap: 28px; }
+    .footer-brand img { height: 110px; margin-top: -30px; }
+    .hero-ctas { flex-direction: column; align-items: center; width: 100%; }
+    .hero-cta, .hero-outline { width: 100%; justify-content: center; }
+    .footer-bottom { flex-direction: column; text-align: center; justify-content: center; }
+  }
+  @media (max-width: 400px) {
+    nav { height: 68px; padding: 0 4%; }
+    .nav-logo img { height: 96px; margin-top: 42px; }
+    nav.nav-scrolled .nav-logo img { height: 68px; }
+    .hero-servicios h1 { font-size: 30px; }
+    .hero-servicios p { font-size: 15px; }
+    .section { padding: 60px 16px; }
+    .section-title { font-size: 26px; }
+    .apartado-content h3 { font-size: 22px; }
+    .apartado-content li { font-size: 14px; }
+    .menu-overlay-links a { font-size: 26px; }
   }
 </style>
 </head>
