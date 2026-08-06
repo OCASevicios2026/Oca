@@ -13,6 +13,8 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Re
 from sqlalchemy import select
 
 import chatbot
+import gemini
+import memory
 import models
 import ycloud_client
 from config import settings
@@ -84,6 +86,27 @@ def _inbound_text(msg: dict) -> str | None:
     return None
 
 
+def _inbound_media(msg: dict) -> dict | None:
+    """Extrae el identificador del archivo multimedia entrante, si existe.
+
+    YCloud puede enviar el media bajo la clave del tipo de mensaje
+    (image/audio/document) y/o bajo la clave "media". Devolvemos:
+    {"type": "image"|"audio"|"document", "mime": str} o None.
+    """
+    msg_type = msg.get("type")
+    if msg_type not in ("image", "audio", "document", "video"):
+        return None
+    media_obj = msg.get("media") or msg.get(msg_type) or {}
+    media_id = media_obj.get("id") or media_obj.get("media_id")
+    if not media_id:
+        return None
+    return {
+        "id": media_id,
+        "type": "audio" if msg_type == "audio" else "image" if msg_type == "image" else "document",
+        "mime": media_obj.get("mimeType") or media_obj.get("mime_type") or "",
+    }
+
+
 def _send_sync(phone: str, body: str, conversation_id: int | None = None) -> None:
     """Envía un mensaje (async) dentro de un hilo de BackgroundTasks."""
     try:
@@ -112,6 +135,18 @@ def _process_event(payload: dict) -> None:
     phone = _normalize_phone(phone_raw)
     wamid = msg.get("wamid") or msg.get("id") or ""
 
+    text = _inbound_text(msg)
+    media = _inbound_media(msg)
+
+    # Descarga el archivo multimedia (imagen, nota de voz o PDF) si viene adjunto
+    media_bytes: bytes | None = None
+    if media:
+        try:
+            media_bytes = asyncio.run(ycloud_client.download_media(media["id"]))
+        except Exception:
+            logger.exception("Fallo al descargar media de %s", phone)
+            media = None
+
     with SessionLocal() as db:
         # Idempotencia: ignorar entregas duplicadas del mismo mensaje
         if wamid and db.execute(
@@ -129,24 +164,56 @@ def _process_event(payload: dict) -> None:
             db.add(conversation)
             db.flush()
 
-        text = _inbound_text(msg)
+        # Historial previo (excluye el mensaje en curso, aun no guardado)
+        history = memory.build_chat_history(conversation.id)
+
+        if text is None:
+            content = f"[{msg.get('type')}]"
+        else:
+            content = text
+
         db.add(
             models.Message(
                 conversation_id=conversation.id,
                 direction="in",
-                content=text or f"[{msg.get('type')}]",
+                content=content,
                 wamid=wamid,
             )
         )
 
-        if text is None:
+        if text is None and media is None:
             db.commit()
             logger.info("Mensaje no-texto ignorado de %s", phone)
             return
 
-        result = chatbot.handle_inbound(
-            text, conversation.state, conversation.customer_name
-        )
+        # Decide la respuesta: reglas primero; Gemini para multimedia o
+        # cuando el flujo por reglas no reconoce el mensaje (fallback).
+        result = None
+        if media is not None:
+            reply = gemini.generate_reply(
+                history,
+                text or "",
+                media_type=media["type"],
+                media_bytes=media_bytes,
+            )
+            result = {
+                "replies": [reply],
+                "state": conversation.state,
+                "customer_name": conversation.customer_name,
+                "lead": None,
+            }
+        else:
+            result = chatbot.handle_inbound(
+                text, conversation.state, conversation.customer_name
+            )
+            if result["replies"] == [chatbot.FALLBACK_REPLY]:
+                reply = gemini.generate_reply(history, text)
+                result = {
+                    "replies": [reply],
+                    "state": conversation.state,
+                    "customer_name": conversation.customer_name,
+                    "lead": None,
+                }
 
         conversation.state = result["state"]
         if result.get("customer_name"):

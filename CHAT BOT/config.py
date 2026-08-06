@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     # Opcional: numero al que se notifican los leads de cotizacion (formato E.164)
     lead_notify_phone: str = ""
 
+    # Gemini (Google AI Studio: https://aistudio.google.com/apikey)
+    # Nota: gemini-2.5-flash ya no se ofrece a usuarios nuevos; usamos 3.5-flash.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+
     # PostgreSQL (Railway la inyecta como DATABASE_URL)
     database_url: str = "postgresql://postgres:postgres@localhost:5432/oca_chatbot"
 
