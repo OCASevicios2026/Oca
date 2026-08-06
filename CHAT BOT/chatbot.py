@@ -19,34 +19,21 @@ FALLBACK_REPLY = (
 
 def build_menu() -> str:
     lines = [
-        "*OCA Servicios Integrales S.A.S.*",
+        "Ofrecemos consultorías, estructuras metálicas, redes de urbanismo, instalaciones hidráulicas y sanitarias, redes contra incendios, construcción de vías, impermeabilización, acabados y mampostería, y mantenimiento de A/C.",
         "",
-        "Somos especialistas en obras de ingenieria civil y climatizacion en Santa Marta y el Caribe.",
-        "",
-        "¿En que podemos ayudarte? Responde con el *numero* de la opcion:",
-        "",
+        "¿En cuál de estos servicios te puedo ayudar?",
     ]
-    for key, svc in MENU_OPTIONS.items():
-        lines.append(f"{key}. {svc['name']}")
-    lines.extend(
-        [
-            "",
-            "0. Hablar con un asesor",
-            "",
-            "Tambien puedes escribir *servicios*, *cotizar*, *contacto* u *horario*.",
-        ]
-    )
     return "\n".join(lines)
 
 
 def service_detail(key: str) -> str:
     svc = MENU_OPTIONS[key]
-    lines = [f"*{svc['name']}*", "", svc["desc"], ""]
+    lines = [f"{svc['name']}", "", svc["desc"], ""]
     lines.extend(f"- {item}" for item in svc["items"])
     lines.extend(
         [
             "",
-            "¿Deseas que un asesor te cotice este servicio? Responde *SI* o *NO*.",
+            "¿Te gustaría que un asesor te prepare una cotización?",
         ]
     )
     return "\n".join(lines)
@@ -63,7 +50,7 @@ def _has_any(text: str, words: tuple[str, ...]) -> bool:
 
 
 INTENT_HI = ("hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "hi", "hello")
-INTENT_MENU = ("menu", "opciones", "catalogo", "servicios", "que hacen", "que ofrecen", "ayuda")
+INTENT_MENU = ("menu", "opciones", "catalogo", "servicios", "servicio", "que hacen", "que ofrecen", "ayuda")
 INTENT_CONTACT = ("contacto", "telefono", "whatsapp", "direccion", "ubicacion", "donde", "nit", "correo")
 INTENT_HOURS = ("horario", "horas", "atienden", "cuando atienden")
 INTENT_QUOTE = ("cotizar", "cotizacion", "presupuesto", "precio", "tarifa", "costo", "cuanto cuesta")
@@ -183,6 +170,14 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         }
 
     if _has_any(normalized, INTENT_MENU):
+        service_key = _extract_service_key(text)
+        if service_key:
+            return {
+                "replies": [service_detail(service_key)],
+                "state": f"service:{service_key}",
+                "customer_name": customer_name,
+                "lead": None,
+            }
         return {
             "replies": [build_menu()],
             "state": "menu",
@@ -215,7 +210,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
             return {
                 "replies": [
                     service_detail(service_key),
-                    "¿Deseas cotizar este servicio? Responde *SI* o *NO*.",
+                    "Si quieres, te preparo la cotización. Solo dime tu nombre y teléfono.",
                 ],
                 "state": f"service:{service_key}",
                 "customer_name": customer_name,
@@ -230,7 +225,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
 
     if _has_any(normalized, INTENT_THANKS):
         return {
-            "replies": ["¡Con gusto! Para volver al menu escribe *menu* o *servicios*. Quedamos atentos."],
+            "replies": ["¡Con gusto! Si necesitas algo más, aquí estoy. Quedamos atentos."],
             "state": state,
             "customer_name": customer_name,
             "lead": None,

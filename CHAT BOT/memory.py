@@ -1,7 +1,7 @@
 """Memoria de conversacion por usuario.
 
 Reutiliza las tablas existentes en PostgreSQL (`conversations` y `messages`)
-para construir el historial que se envia a Gemini. Cada usuario (numero de
+para construir el historial que se envia a Groq. Cada usuario (numero de
 WhatsApp) tiene su propia conversacion y, por tanto, su propio historial.
 """
 
@@ -10,8 +10,8 @@ from sqlalchemy import select
 from database import SessionLocal
 from models import Message
 
-# Maximo de mensajes (entrantes + salientes) que se envian a Gemini como contexto
-MAX_HISTORY_MESSAGES = 20
+# Maximo de mensajes (entrantes + salientes) que se envian a Groq como contexto
+MAX_HISTORY_MESSAGES = 10
 
 
 def get_recent_messages(conversation_id: int, limit: int = MAX_HISTORY_MESSAGES) -> list[Message]:
@@ -27,7 +27,7 @@ def get_recent_messages(conversation_id: int, limit: int = MAX_HISTORY_MESSAGES)
 
 
 def build_chat_history(conversation_id: int) -> list[dict]:
-    """Construye el historial en el formato esperado por Gemini.
+    """Construye el historial en el formato esperado por Groq.
 
     Devuelve una lista de {"role": "user"|"model", "content": str}.
     El ultimo mensaje (el entrante en curso) se excluye para no duplicar la

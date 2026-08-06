@@ -185,10 +185,38 @@
 </footer>
 
 <script>
-  document.getElementById('cotizacionForm').addEventListener('submit', function (e) {
+  document.getElementById('cotizacionForm').addEventListener('submit', async function (e) {
     e.preventDefault();
-    document.getElementById('cotizacionForm').style.display = 'none';
-    document.getElementById('formMensaje').style.display = 'block';
+    var btn = this.querySelector('button[type=submit]');
+    btn.disabled = true;
+    var mensaje = document.getElementById('formMensaje');
+    var formData = new FormData(this);
+    try {
+      var res = await fetch('https://oca-chatbot-production.up.railway.app/api/lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombre: formData.get('nombre'),
+          telefono: formData.get('telefono'),
+          servicio: formData.get('servicio'),
+          descripcion: formData.get('descripcion')
+        })
+      });
+      if (res.ok) {
+        document.getElementById('cotizacionForm').style.display = 'none';
+        mensaje.style.display = 'block';
+      } else {
+        mensaje.textContent = 'Hubo un problema al enviar su solicitud. Intente de nuevo o escríbanos al 317 400 4016.';
+        mensaje.style.display = 'block';
+        mensaje.style.color = '#FF8A80';
+        btn.disabled = false;
+      }
+    } catch (err) {
+      mensaje.textContent = 'Hubo un problema al enviar su solicitud. Intente de nuevo o escríbanos al 317 400 4016.';
+      mensaje.style.display = 'block';
+      mensaje.style.color = '#FF8A80';
+      btn.disabled = false;
+    }
   });
 </script>
 <script src="js/script.js"></script>

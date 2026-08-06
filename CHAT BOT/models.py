@@ -44,12 +44,16 @@ class Lead(Base):
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(_id_type, primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("conversations.id"), index=True, nullable=False
+    conversation_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("conversations.id"), index=True, nullable=True
     )
     whatsapp_phone: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     customer_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     service: Mapped[str | None] = mapped_column(String(120), nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     notified: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Origen: "whatsapp" (bot) o "web" (formulario de la pagina)
+    source: Mapped[str] = mapped_column(String(20), default="whatsapp", nullable=False)
+    # Estado: "nuevo" | "contactado" (para el panel administrativo)
+    status: Mapped[str] = mapped_column(String(20), default="nuevo", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

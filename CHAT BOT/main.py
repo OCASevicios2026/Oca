@@ -4,21 +4,24 @@ Despliegue: Railway ejecuta `uvicorn main:app`.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
-from sqlalchemy import select
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 import chatbot
-import gemini
+import groq_client as ai
 import memory
 import models
 import ycloud_client
 from config import settings
-from database import Base, SessionLocal, engine
+from database import Base, SessionLocal, engine, get_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("oca-chatbot")
@@ -27,11 +30,37 @@ logger = logging.getLogger("oca-chatbot")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # Migracion minima (Postgres): columnas del panel en tablas existentes
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE leads ALTER COLUMN conversation_id DROP NOT NULL"))
+            conn.execute(
+                text(
+                    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS source VARCHAR(20) "
+                    "NOT NULL DEFAULT 'whatsapp'"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status VARCHAR(20) "
+                    "NOT NULL DEFAULT 'nuevo'"
+                )
+            )
     logger.info("Tablas verificadas. OCA Chatbot listo.")
     yield
 
 
 app = FastAPI(title="OCA WhatsApp Chatbot", version="1.0.0", lifespan=lifespan)
+
+# CORS: permite que la web (panel y formulario) consulte la API del bot
+_cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 def verify_signature(raw_body: bytes, header: str | None) -> bool:
@@ -108,7 +137,7 @@ def _inbound_media(msg: dict) -> dict | None:
 
 
 def _send_sync(phone: str, body: str, conversation_id: int | None = None) -> None:
-    """Envía un mensaje (async) dentro de un hilo de BackgroundTasks."""
+    """EnvÃ­a un mensaje (async) dentro de un hilo de BackgroundTasks."""
     try:
         asyncio.run(ycloud_client.send_text(phone, body))
         if conversation_id is not None:
@@ -186,11 +215,11 @@ def _process_event(payload: dict) -> None:
             logger.info("Mensaje no-texto ignorado de %s", phone)
             return
 
-        # Decide la respuesta: reglas primero; Gemini para multimedia o
+        # Decide la respuesta: reglas primero; Groq para multimedia o
         # cuando el flujo por reglas no reconoce el mensaje (fallback).
         result = None
         if media is not None:
-            reply = gemini.generate_reply(
+            reply = ai.generate_reply(
                 history,
                 text or "",
                 media_type=media["type"],
@@ -207,13 +236,35 @@ def _process_event(payload: dict) -> None:
                 text, conversation.state, conversation.customer_name
             )
             if result["replies"] == [chatbot.FALLBACK_REPLY]:
-                reply = gemini.generate_reply(history, text)
+                reply = ai.generate_reply(history, text)
                 result = {
                     "replies": [reply],
                     "state": conversation.state,
                     "customer_name": conversation.customer_name,
                     "lead": None,
                 }
+            elif (
+                result["state"].startswith("service:")
+                and len(result["replies"]) == 1
+                and result["replies"][0] == chatbot.service_detail(result["state"].split(":", 1)[1])
+            ):
+                # Humanizar el detalle de servicio (tono de asesor) sin romper el flujo
+                humanized = ai.humanize_service_reply(
+                    result["state"].split(":", 1)[1]
+                )
+                if humanized:
+                    result["replies"] = [humanized]
+            elif (
+                result["state"] == "menu"
+                and len(result["replies"]) == 1
+                and result["replies"][0].startswith("¡Hola! Bienvenido a OCA Servicios Integrales.")
+            ):
+                # Humanizar el saludo inicial: bienvenida natural con los servicios en prosa
+                # (solo la primera vez; si el cliente ya tiene historial, se saluda corto)
+                returning = bool(history)
+                greeting = ai.humanize_greeting(conversation.customer_name, returning=returning)
+                if greeting:
+                    result["replies"] = [greeting]
 
         conversation.state = result["state"]
         if result.get("customer_name"):
@@ -231,6 +282,8 @@ def _process_event(payload: dict) -> None:
                 service=lead_service,
                 message=final_lead["message"],
                 notified=1 if settings.lead_notify_phone else 0,
+                source="whatsapp",
+                status="nuevo",
             )
             db.add(lead)
             conversation.pending_service = None
@@ -307,3 +360,110 @@ async def webhook_slash(
         return await _handle_webhook_request(request, response, background_tasks, ycloud_signature)
     logger.info("Webhook slash %s received on GET/HEAD/OPTIONS", request.method)
     return {"status": "ok", "detail": "Webhook endpoint is alive. Send POST for events."}
+
+
+# ---------------------------------------------------------------------------
+# Panel administrativo de notificaciones
+# ---------------------------------------------------------------------------
+
+def _require_admin(authorization: str | None = Header(default=None)):
+    """Valida credenciales Basic Auth del panel."""
+    if not settings.admin_user or not settings.admin_password:
+        raise HTTPException(status_code=503, detail="Panel desactivado: falta ADMIN_USER/ADMIN_PASSWORD")
+    if not authorization or not authorization.lower().startswith("basic "):
+        raise HTTPException(status_code=401, detail="Se requiere autenticacion")
+    try:
+        decoded = base64.b64decode(authorization.split(" ", 1)[1]).decode("utf-8")
+        user, _, password = decoded.partition(":")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Credenciales invalidas")
+    if user != settings.admin_user or password != settings.admin_password:
+        raise HTTPException(status_code=401, detail="Credenciales invalidas")
+    return True
+
+
+@app.post("/api/lead")
+async def create_lead_from_web(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Recibe solicitudes/cotizaciones desde el formulario de la web."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalido")
+
+    phone = str(data.get("telefono") or "").strip()
+    name = (data.get("nombre") or "").strip() or None
+    service = (data.get("servicio") or "").strip() or None
+    message = (data.get("descripcion") or "").strip() or None
+    if not phone or (not service and not message):
+        raise HTTPException(status_code=400, detail="Faltan datos: telefono y servicio/descripcion")
+
+    lead = models.Lead(
+        conversation_id=None,
+        whatsapp_phone=phone,
+        customer_name=name,
+        service=service,
+        message=message,
+        notified=0,
+        source="web",
+        status="nuevo",
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    logger.info("Nuevo lead web #%s de %s (%s)", lead.id, name or phone, service)
+    return {"status": "ok", "id": lead.id}
+
+
+@app.get("/api/leads")
+async def list_leads(db: Session = Depends(get_db), _: bool = Depends(_require_admin)):
+    """Lista todas las solicitudes para el panel administrativo."""
+    rows = db.execute(
+        select(models.Lead).order_by(models.Lead.created_at.desc()).limit(100)
+    ).scalars().all()
+    return [
+        {
+            "id": l.id,
+            "phone": l.whatsapp_phone,
+            "name": l.customer_name,
+            "service": l.service,
+            "message": l.message,
+            "source": l.source,
+            "status": l.status,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+        }
+        for l in rows
+    ]
+
+
+@app.post("/api/leads/{lead_id}/contacted")
+async def mark_lead_contacted(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    _: bool = Depends(_require_admin),
+):
+    """Marca una solicitud como contactada desde el panel."""
+    lead = db.get(models.Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    lead.status = "contactado"
+    db.commit()
+    return {"status": "ok", "id": lead_id}
+
+
+@app.delete("/api/leads/{lead_id}")
+async def delete_lead(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    _: bool = Depends(_require_admin),
+):
+    """Elimina una solicitud desde el panel."""
+    lead = db.get(models.Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    db.delete(lead)
+    db.commit()
+    return {"status": "ok", "id": lead_id}
+

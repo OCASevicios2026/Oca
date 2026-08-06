@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel OCA - Notificaciones</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Montserrat:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .panel-body { background: #F4F6FA; color: var(--text); min-height: 100vh; }
+  .panel-top { background: var(--navy); color: #fff; padding: 20px 5%; display: flex; align-items: center; justify-content: space-between; }
+  .panel-top h1 { font-size: 22px; font-weight: 700; }
+  .panel-top .brand img { height: 34px; }
+  .panel-top .sub { font-size: 13px; color: #94A3B8; margin-top: 2px; }
+  .panel-top .logout { background: none; border: 1px solid #334155; color: #CBD5E1; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  .panel-top .logout:hover { border-color: var(--accent); color: #fff; }
+  .panel-wrap { max-width: 960px; margin: 0 auto; padding: 32px 5%; }
+  .stats { display: flex; gap: 14px; margin-bottom: 28px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 140px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+  .stat .num { font-size: 26px; font-weight: 700; }
+  .stat .lbl { font-size: 13px; color: var(--text-tertiary); margin-top: 2px; }
+  .stat.nuevo .num { color: var(--accent); }
+  .stat.contactado .num { color: #16A34A; }
+  .lead { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
+  .lead.contactado { opacity: 0.6; }
+  .lead .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .lead .name { font-size: 16px; font-weight: 600; }
+  .lead .phone { font-size: 14px; color: var(--text-secondary); }
+  .lead .badge { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; padding: 4px 10px; border-radius: 999px; text-transform: uppercase; }
+  .badge.whatsapp { background: var(--accent-light); color: var(--accent-dark); }
+  .badge.web { background: #FEF3C7; color: #B45309; }
+  .badge.nuevo { background: #FEE2E2; color: #DC2626; }
+  .badge.contactado { background: #DCFCE7; color: #16A34A; }
+  .lead .meta { font-size: 13px; color: var(--text-tertiary); margin-bottom: 8px; }
+  .lead .service { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .lead .message { font-size: 14px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap; }
+  .lead .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 9px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; border: 1px solid var(--border); background: #fff; cursor: pointer; color: var(--text); text-decoration: none; }
+  .btn.wa { background: #25D366; border-color: #25D366; color: #fff; }
+  .btn.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn.del { background: #fff; border-color: #FECACA; color: #DC2626; }
+  .empty { text-align: center; color: var(--text-tertiary); padding: 60px 0; font-size: 15px; }
+  .login-card { max-width: 380px; margin: 10vh auto 0; background: #fff; border: 1px solid var(--border); border-radius: 18px; padding: 32px 30px; box-shadow: var(--shadow-lg); }
+  .login-card h2 { font-size: 20px; margin-bottom: 4px; }
+  .login-card p { font-size: 13px; color: var(--text-tertiary); margin-bottom: 20px; }
+  .login-card .form-group { margin-bottom: 14px; }
+  .login-card .form-group input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; font-size: 15px; background: #fff; color: var(--text); }
+  .login-card .form-group input:focus { border-color: var(--accent); outline: none; }
+  .login-card .btn { width: 100%; text-align: center; background: var(--accent); border-color: var(--accent); color: #fff; padding: 12px; }
+  .login-error { color: #DC2626; font-size: 13px; margin-top: 10px; display: none; }
+  .refresh-hint { text-align: center; font-size: 12px; color: var(--text-tertiary); margin-top: 24px; }
+</style>
+</head>
+<body class="panel-body">
+
+<div id="loginView" style="display:none">
+  <div class="login-card">
+    <h2>Panel OCA</h2>
+    <p>Notificaciones de solicitudes y cotizaciones.</p>
+    <form id="loginForm">
+      <div class="form-group">
+        <input type="text" id="loginUser" placeholder="Usuario" autocomplete="username" required>
+      </div>
+      <div class="form-group">
+        <input type="password" id="loginPass" placeholder="Contraseña" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn">Entrar →</button>
+      <div class="login-error" id="loginError">Credenciales incorrectas.</div>
+    </form>
+  </div>
+</div>
+
+<div id="panelView" style="display:none">
+  <div class="panel-top">
+    <div style="display:flex; align-items:center; gap:14px;">
+      <img class="brand" src="img/LOGO OCA 2026.1.png" alt="OCA">
+      <div>
+        <h1>Notificaciones</h1>
+        <div class="sub">Solicitudes de clientes · WhatsApp y web</div>
+      </div>
+    </div>
+    <button class="logout" id="logoutBtn">Cerrar sesión</button>
+  </div>
+  <div class="panel-wrap">
+    <div class="stats">
+      <div class="stat nuevo"><div class="num" id="statNuevo">0</div><div class="lbl">Por contactar</div></div>
+      <div class="stat contactado"><div class="num" id="statContactado">0</div><div class="lbl">Contactados</div></div>
+    </div>
+    <div id="leadList"><div class="empty">Cargando solicitudes...</div></div>
+    <div class="refresh-hint">Actualiza automáticamente cada 30 segundos</div>
+  </div>
+</div>
+
+<script>
+  var API = 'https://oca-chatbot-production.up.railway.app';
+  var authB64 = null;
+  var leads = [];
+
+  function authHeader() { return 'Basic ' + authB64; }
+
+  function showView(view) {
+    document.getElementById('loginView').style.display = view === 'login' ? 'block' : 'none';
+    document.getElementById('panelView').style.display = view === 'panel' ? 'block' : 'none';
+  }
+
+  function init() {
+    var saved = sessionStorage.getItem('oca_auth');
+    if (saved) {
+      authB64 = saved;
+      showView('panel');
+      loadLeads();
+      setInterval(loadLeads, 30000);
+    } else {
+      showView('login');
+    }
+  }
+
+  document.getElementById('loginForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var user = document.getElementById('loginUser').value.trim();
+    var pass = document.getElementById('loginPass').value;
+    var candidate = btoa(unescape(encodeURIComponent(user + ':' + pass)));
+    authB64 = candidate;
+    try {
+      var res = await fetch(API + '/api/leads', { headers: { 'Authorization': 'Basic ' + candidate } });
+      if (res.ok) {
+        sessionStorage.setItem('oca_auth', candidate);
+        document.getElementById('loginError').style.display = 'none';
+        showView('panel');
+        loadLeads();
+        setInterval(loadLeads, 30000);
+      } else {
+        authB64 = null;
+        document.getElementById('loginError').style.display = 'block';
+      }
+    } catch (err) {
+      document.getElementById('loginError').textContent = 'No se pudo conectar con el servidor.';
+      document.getElementById('loginError').style.display = 'block';
+    }
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', function () {
+    sessionStorage.removeItem('oca_auth');
+    authB64 = null;
+    showView('login');
+  });
+
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function waLink(phone) {
+    var p = (phone || '').replace(/[^0-9]/g, '');
+    if (p.length === 10) p = '57' + p;
+    return 'https://wa.me/' + p;
+  }
+
+  function render() {
+    var nuevo = leads.filter(function (l) { return l.status !== 'contactado'; }).length;
+    var contactado = leads.filter(function (l) { return l.status === 'contactado'; }).length;
+    document.getElementById('statNuevo').textContent = nuevo;
+    document.getElementById('statContactado').textContent = contactado;
+
+    var list = document.getElementById('leadList');
+    if (!leads.length) {
+      list.innerHTML = '<div class="empty">No hay solicitudes registradas todavía.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    leads.forEach(function (l) {
+      var el = document.createElement('div');
+      el.className = 'lead' + (l.status === 'contactado' ? ' contactado' : '');
+      var badge = (l.source === 'web') ? 'web' : 'whatsapp';
+      var waBtn = '<a class="btn wa" target="_blank" rel="noopener" href="' + waLink(l.phone) + '">WhatsApp</a>';
+      var doneBtn = (l.status === 'contactado')
+        ? '<button class="btn" disabled>Contactado ✓</button>'
+        : '<button class="btn done" data-id="' + l.id + '">Marcar contactado</button>';
+      var delBtn = '<button class="btn del" data-id="' + l.id + '">Eliminar</button>';
+      el.innerHTML =
+        '<div class="head">' +
+          '<span class="name">' + (l.name || 'Cliente') + '</span>' +
+          '<span class="phone">' + l.phone + '</span>' +
+          '<span class="badge ' + badge + '">' + badge + '</span>' +
+          '<span class="badge ' + l.status + '">' + l.status + '</span>' +
+        '</div>' +
+        '<div class="meta">' + fmtDate(l.created_at) + '</div>' +
+        (l.service ? '<div class="service">' + l.service + '</div>' : '') +
+        (l.message ? '<div class="message">' + l.message.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>' : '') +
+        '<div class="actions">' + waBtn + doneBtn + delBtn + '</div>';
+      list.appendChild(el);
+    });
+    list.querySelectorAll('.btn.done').forEach(function (b) {
+      b.addEventListener('click', function () { markContacted(b.dataset.id, b); });
+    });
+    list.querySelectorAll('.btn.del').forEach(function (b) {
+      b.addEventListener('click', function () { deleteLead(b.dataset.id, b); });
+    });
+  }
+
+  async function loadLeads() {
+    if (!authB64) return;
+    try {
+      var res = await fetch(API + '/api/leads', { headers: { 'Authorization': authHeader() } });
+      if (res.status === 401) {
+        sessionStorage.removeItem('oca_auth');
+        authB64 = null;
+        showView('login');
+        return;
+      }
+      if (!res.ok) throw new Error('bad status');
+      leads = await res.json();
+      render();
+    } catch (err) {
+      document.getElementById('leadList').innerHTML = '<div class="empty">No se pudo conectar con el servidor.</div>';
+    }
+  }
+
+  async function markContacted(id, btn) {
+    btn.disabled = true;
+    try {
+      var res = await fetch(API + '/api/leads/' + id + '/contacted', {
+        method: 'POST',
+        headers: { 'Authorization': authHeader() }
+      });
+      if (res.ok) {
+        leads.forEach(function (l) { if (String(l.id) === String(id)) l.status = 'contactado'; });
+        render();
+      } else {
+        btn.disabled = false;
+      }
+    } catch (err) {
+      btn.disabled = false;
+    }
+  }
+
+  async function deleteLead(id, btn) {
+    if (!confirm('¿Eliminar esta solicitud?')) return;
+    btn.disabled = true;
+    try {
+      var res = await fetch(API + '/api/leads/' + id, {
+        method: 'DELETE',
+        headers: { 'Authorization': authHeader() }
+      });
+      if (res.ok) {
+        leads = leads.filter(function (l) { return String(l.id) !== String(id); });
+        render();
+      } else {
+        btn.disabled = false;
+      }
+    } catch (err) {
+      btn.disabled = false;
+    }
+  }
+
+  init();
+</script>
+
+</body>
+</html>
