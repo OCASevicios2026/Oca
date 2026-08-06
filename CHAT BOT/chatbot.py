@@ -71,6 +71,7 @@ INTENT_HUMAN = ("asesor", "persona", "humano", "agente", "hablar con alguien", "
 INTENT_YES = ("si", "sip", "claro", "perfecto", "dale", "ok", "bueno", "sale", "confirmar")
 INTENT_NO = ("no", "nop", "no gracias", "ahora no", "despues")
 INTENT_THANKS = ("gracias", "muchas gracias", "genial", "excelente", "vale", "ok perfecto")
+INTENT_CANCEL = ("cancelar", "cancelacion", "dejarlo", "salir", "empezar de nuevo", "olvidalo", "deja asi")
 
 
 def _extract_service_key(text: str) -> str | None:
@@ -100,6 +101,23 @@ def _extract_service_key(text: str) -> str | None:
 def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     """Devuelve {replies, state, customer_name, lead} segun el estado actual."""
     normalized = normalize(text)
+
+    # --- Comandos de escape: permiten salir de los flujos de captura ---
+    # Si el usuario esta en medio de una cotizacion (pide nombre o detalles)
+    # y escribe un comando general, se cancela la captura y se vuelve al menu.
+    if state in ("awaiting_name", "awaiting_details"):
+        if (
+            _has_any(normalized, INTENT_CANCEL)
+            or _has_any(normalized, INTENT_MENU)
+            or _has_any(normalized, INTENT_HI)
+            or normalized in ("0", "menu")
+        ):
+            return {
+                "replies": ["Entendido. ¿En que mas puedo ayudarte?\n\n" + build_menu()],
+                "state": "menu",
+                "customer_name": customer_name,
+                "lead": None,
+            }
 
     # --- Estados de captura de datos ---
     if state == "awaiting_name":
