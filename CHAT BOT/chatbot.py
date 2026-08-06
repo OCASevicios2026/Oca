@@ -13,17 +13,18 @@ from knowledge import BUSINESS_INFO, MENU_OPTIONS
 # Respuesta generica cuando las reglas no reconocen el mensaje.
 # main.py detecta esta respuesta para delegar la conversacion a Gemini.
 FALLBACK_REPLY = (
-    "No entiendo bien tu mensaje, pero con gusto te ayudo. Escribe *menu* "
-    "para ver las opciones o el numero del servicio que necesitas."
+    "No estoy seguro de haber entendido, pero con gusto te ayudo. "
+    "Escribe *menu* para ver nuestros servicios o dime qué necesitas y te guío."
 )
+
 
 def build_menu() -> str:
     lines = [
-        "*OCA Servicios Integrales S.A.S.*",
+        "Hola, soy el asistente de *OCA Servicios Integrales*.",
         "",
-        "Somos especialistas en obras de ingenieria civil y climatizacion en Santa Marta y el Caribe.",
+        "Ofrecemos soluciones en ingeniería civil y climatización en Santa Marta y el Caribe.",
         "",
-        "¿En que podemos ayudarte? Responde con el *numero* de la opcion:",
+        "Estos son los servicios que podemos atender:",
         "",
     ]
     for key, svc in MENU_OPTIONS.items():
@@ -33,7 +34,7 @@ def build_menu() -> str:
             "",
             "0. Hablar con un asesor",
             "",
-            "Tambien puedes escribir *servicios*, *cotizar*, *contacto* u *horario*.",
+            "Puedes escribir el número del servicio o simplemente decir el nombre del servicio que buscas.",
         ]
     )
     return "\n".join(lines)
@@ -46,11 +47,11 @@ def service_detail(key: str) -> str:
     lines.extend(
         [
             "",
-            "¿Deseas que un asesor te cotice este servicio? Responde *SI* o *NO*.",
+            "Si quieres, puedo pedirle a un asesor que te prepare una cotización para este servicio.",
+            "Responde *SI* o *NO*.",
         ]
     )
     return "\n".join(lines)
-
 
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFD", text.lower().strip())
@@ -124,7 +125,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         name = text.strip()
         return {
             "replies": [
-                f"Gracias, {name}. Cuentanos brevemente tu proyecto o necesidad para pasarsela al asesor (por ejemplo, el tipo de servicio, el lugar y el alcance)."
+                f"Gracias, {name}. Cuéntanos brevemente tu proyecto o necesidad para pasársela al asesor (por ejemplo, el tipo de servicio, el lugar y el alcance)."
             ],
             "state": "awaiting_details",
             "customer_name": name,
@@ -134,7 +135,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     if state == "awaiting_details":
         return {
             "replies": [
-                "¡Perfecto! Hemos registrado tu solicitud. Un asesor de OCA te contactara muy pronto por este mismo canal.",
+                "¡Perfecto! Hemos registrado tu solicitud. Un asesor de OCA te contactará muy pronto por este mismo canal.",
             ],
             "state": "menu",
             "customer_name": customer_name,
@@ -145,14 +146,14 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     if state.startswith("service:"):
         if _has_any(normalized, INTENT_YES):
             return {
-                "replies": ["Perfecto. ¿Cual es tu nombre?"],
+                "replies": ["Perfecto. ¿Cuál es tu nombre?"],
                 "state": "awaiting_name",
                 "customer_name": customer_name,
                 "lead": {"service": MENU_OPTIONS[state.split(":")[1]]["name"]},
             }
         if _has_any(normalized, INTENT_NO):
             return {
-                "replies": ["Sin problema. ¿En que mas puedo ayudarte?"],
+                "replies": ["Sin problema. ¿En qué más puedo ayudarte?"],
                 "state": "menu",
                 "customer_name": customer_name,
                 "lead": None,
@@ -162,13 +163,13 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     if _has_any(normalized, INTENT_HUMAN):
         if customer_name:
             return {
-                "replies": ["Te pongo en contacto con un asesor. ¿Cual es tu nombre?"],
+                "replies": ["Te pongo en contacto con un asesor. ¿Cuál es tu nombre?"],
                 "state": "awaiting_name",
                 "customer_name": customer_name,
                 "lead": None,
             }
         return {
-            "replies": ["Con gusto. Un asesor te atendera. ¿Cual es tu nombre?"],
+            "replies": ["Con gusto. Un asesor te atenderá. ¿Cuál es tu nombre?"],
             "state": "awaiting_name",
             "customer_name": customer_name,
             "lead": None,
@@ -213,16 +214,13 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         service_key = _extract_service_key(text)
         if service_key:
             return {
-                "replies": [
-                    service_detail(service_key),
-                    "¿Deseas cotizar este servicio? Responde *SI* o *NO*.",
-                ],
+                "replies": [service_detail(service_key)],
                 "state": f"service:{service_key}",
                 "customer_name": customer_name,
                 "lead": {"service": MENU_OPTIONS[service_key]["name"]},
             }
         return {
-            "replies": ["Para cotizar, cuentanos primero cual es tu nombre."],
+            "replies": ["Claro, para cotizar necesito tu nombre."],
             "state": "awaiting_name",
             "customer_name": customer_name,
             "lead": None,
@@ -230,7 +228,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
 
     if _has_any(normalized, INTENT_THANKS):
         return {
-            "replies": ["¡Con gusto! Para volver al menu escribe *menu* o *servicios*. Quedamos atentos."],
+            "replies": ["¡Con gusto! Si quieres volver al menú, escribe *menu* o *servicios*. Estoy para ayudarte."],
             "state": state,
             "customer_name": customer_name,
             "lead": None,
