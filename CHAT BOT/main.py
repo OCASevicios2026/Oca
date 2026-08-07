@@ -12,7 +12,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from fastapi.responses import FileResponse
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 import chatbot
@@ -20,6 +21,8 @@ import groq_client as ai
 import memory
 import models
 import ycloud_client
+import bot_control
+from bot_control import should_respond
 from config import settings
 from database import Base, SessionLocal, engine, get_db
 
@@ -44,6 +47,12 @@ async def lifespan(app: FastAPI):
                 text(
                     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status VARCHAR(20) "
                     "NOT NULL DEFAULT 'nuevo'"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS paused BOOLEAN "
+                    "NOT NULL DEFAULT FALSE"
                 )
             )
     logger.info("Tablas verificadas. OCA Chatbot listo.")
@@ -217,6 +226,39 @@ def _process_event(payload: dict) -> None:
         if text is None and media is None:
             db.commit()
             logger.info("Mensaje no-texto ignorado de %s", phone)
+            return
+
+        # Control del bot (panel de admin): si esta apagado/pausado (global o
+        # por chat), no se responde pero se registra el lead para el asesor.
+        respond, pause_reason = should_respond(db, phone)
+        if not respond:
+            lead_service = conversation.pending_service
+            if text or media:
+                db.add(
+                    models.Lead(
+                        conversation_id=conversation.id,
+                        whatsapp_phone=phone,
+                        customer_name=conversation.customer_name,
+                        service=lead_service,
+                        message=(text or f"[{media['type']}]"),
+                        notified=1 if settings.lead_notify_phone else 0,
+                        source="whatsapp",
+                        status="nuevo",
+                    )
+                )
+            db.commit()
+            logger.info("Bot %s (motivo=%s): mensaje de %s registrado como lead, sin respuesta",
+                        pause_reason, pause_reason, phone)
+            if settings.lead_notify_phone and text:
+                _send_sync(
+                    settings.lead_notify_phone,
+                    chatbot.build_lead_message(
+                        phone,
+                        conversation.customer_name,
+                        lead_service,
+                        text,
+                    ),
+                )
             return
 
         # Decide la respuesta: reglas primero; Groq para multimedia o
@@ -480,4 +522,167 @@ async def delete_lead(
     db.delete(lead)
     db.commit()
     return {"status": "ok", "id": lead_id}
+
+
+# ---------------------------------------------------------------------------
+# Panel de administracion del bot
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/status")
+async def admin_bot_status(db: Session = Depends(get_db), _: bool = Depends(_require_admin)):
+    """Devuelve el estado global del bot y metricas generales."""
+    status = bot_control.get_bot_status(db)
+    total_chats = db.execute(select(func.count(models.Conversation.id))).scalar_one()
+    paused_chats = db.execute(
+        select(func.count(models.Conversation.id)).where(models.Conversation.paused.is_(True))
+    ).scalar_one()
+    nuevo_leads = db.execute(
+        select(func.count(models.Lead.id)).where(models.Lead.status == "nuevo")
+    ).scalar_one()
+    total_messages = db.execute(select(func.count(models.Message.id))).scalar_one()
+    return {
+        "status": status,
+        "total_chats": total_chats,
+        "paused_chats": paused_chats,
+        "nuevo_leads": nuevo_leads,
+        "total_messages": total_messages,
+    }
+
+
+@app.post("/api/admin/status")
+async def admin_set_bot_status(request: Request, db: Session = Depends(get_db), _: bool = Depends(_require_admin)):
+    """Cambia el estado global del bot: on | paused | off."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalido")
+    status = str(data.get("status") or "")
+    if status not in bot_control.VALID_STATUS:
+        raise HTTPException(status_code=400, detail="Estado invalido: use on, paused u off")
+    bot_control.set_bot_status(db, status)
+    logger.info("Admin cambio estado global del bot a %s", status)
+    return {"status": status}
+
+
+@app.get("/api/admin/chats")
+async def admin_list_chats(db: Session = Depends(get_db), _: bool = Depends(_require_admin)):
+    """Lista las conversaciones con su estado de pausa y ultimo mensaje."""
+    rows = db.execute(
+        select(models.Conversation).order_by(models.Conversation.updated_at.desc()).limit(200)
+    ).scalars().all()
+    result = []
+    for c in rows:
+        last_msg = db.execute(
+            select(models.Message)
+            .where(models.Message.conversation_id == c.id)
+            .order_by(models.Message.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        msg_count = db.execute(
+            select(func.count(models.Message.id)).where(models.Message.conversation_id == c.id)
+        ).scalar_one()
+        result.append(
+            {
+                "id": c.id,
+                "phone": c.whatsapp_phone,
+                "name": c.customer_name,
+                "state": c.state,
+                "paused": c.paused,
+                "pending_service": c.pending_service,
+                "last_message": last_msg.content if last_msg else None,
+                "last_direction": last_msg.direction if last_msg else None,
+                "message_count": msg_count,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            }
+        )
+    return result
+
+
+@app.get("/api/admin/chats/{chat_id}/messages")
+async def admin_chat_messages(
+    chat_id: int,
+    db: Session = Depends(get_db),
+    _: bool = Depends(_require_admin),
+):
+    """Devuelve el historial de mensajes de una conversacion."""
+    conversation = db.get(models.Conversation, chat_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada")
+    msgs = db.execute(
+        select(models.Message)
+        .where(models.Message.conversation_id == chat_id)
+        .order_by(models.Message.id.asc())
+        .limit(200)
+    ).scalars().all()
+    return {
+        "phone": conversation.whatsapp_phone,
+        "name": conversation.customer_name,
+        "paused": conversation.paused,
+        "messages": [
+            {
+                "direction": m.direction,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in msgs
+        ],
+    }
+
+
+@app.post("/api/admin/chats/{chat_id}/pause")
+async def admin_pause_chat(
+    chat_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: bool = Depends(_require_admin),
+):
+    """Pausa/reanuda un chat especifico (no responde mientras este pausado)."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalido")
+    conversation = db.get(models.Conversation, chat_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada")
+    conversation.paused = bool(data.get("paused", False))
+    db.commit()
+    logger.info("Admin %s chat %s", "pauso" if conversation.paused else "reanudo", chat_id)
+    return {"id": chat_id, "paused": conversation.paused}
+
+
+@app.post("/api/admin/chats/{chat_id}/reply")
+async def admin_reply_chat(
+    chat_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: bool = Depends(_require_admin),
+):
+    """Envia una respuesta manual al chat y la guarda en el historial."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalido")
+    body = (data.get("message") or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Mensaje vacio")
+    conversation = db.get(models.Conversation, chat_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada")
+    await ycloud_client.send_text(conversation.whatsapp_phone, body)
+    db.add(
+        models.Message(
+            conversation_id=conversation.id,
+            direction="out",
+            content=body,
+        )
+    )
+    db.commit()
+    logger.info("Admin respondio manualmente a chat %s", chat_id)
+    return {"status": "ok", "id": chat_id}
+
+
+@app.get("/admin", include_in_schema=False)
+async def admin_panel_page():
+    """Pagina del panel de administracion del bot (mobile-first)."""
+    return FileResponse("admin.html")
 

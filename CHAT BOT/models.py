@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -21,6 +21,7 @@ class Conversation(Base):
     customer_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     state: Mapped[str] = mapped_column(String(60), default="menu", nullable=False)
     pending_service: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -38,6 +39,18 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     wamid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Setting(Base):
+    """Almacenamiento clave-valor para ajustes del bot (p. ej. estado on/off/pausa)."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class Lead(Base):
