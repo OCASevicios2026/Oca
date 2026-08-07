@@ -86,6 +86,41 @@ def humanize_service_reply(service_key: str) -> str | None:
         return None
 
 
+def humanize_menu() -> str | None:
+    """Lista los servicios en prosa natural (tono de asesor), variando la apertura.
+
+    Evita el formato de menu con numeros y asteriscos para que no parezca
+    una respuesta preprogramada. Devuelve None si Groq falla.
+    """
+    services = ", ".join(svc["name"] for svc in MENU_OPTIONS.values())
+    try:
+        reply = _run(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Actua como asesor de OCA Servicios Integrales (Santa Marta, Colombia). "
+                        "El cliente pregunto por los servicios que ofrecen. "
+                        "VARIA la apertura: no empieces con 'Claro' ni 'Perfecto' ni 'Estos son'; "
+                        "usa formas naturales como 'Con gusto te comento', 'Te cuento', "
+                        "'Quedo atento, trabajamos en', 'Mira, ofrecemos' u otra variacion. "
+                        "Menciona los servicios en una lista natural, en prosa, sin numeros, "
+                        "asteriscos ni viñetas: "
+                        f"{services}. "
+                        "Termina preguntando cual le interesa para ayudarle mejor. "
+                        "Maximo 3-4 lineas. No uses emojis."
+                    ),
+                }
+            ],
+            temperature=0.9,
+            max_tokens=300,
+        )
+        return (reply or "").strip('"') or None
+    except Exception:
+        logger.exception("Error al humanizar menu")
+        return None
+
+
 def humanize_greeting(customer_name: str | None, returning: bool = False) -> str | None:
     """Bienvenida natural y variada segun el tipo de cliente.
 

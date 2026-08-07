@@ -265,6 +265,15 @@ def _process_event(payload: dict) -> None:
                 greeting = ai.humanize_greeting(conversation.customer_name, returning=returning)
                 if greeting:
                     result["replies"] = [greeting]
+            elif (
+                result["state"] == "menu"
+                and len(result["replies"]) == 1
+                and result["replies"][0] == chatbot.build_menu()
+            ):
+                # Humanizar el menu: respuestas variadas y naturales en vez de texto fijo
+                menu_natural = ai.humanize_menu()
+                if menu_natural:
+                    result["replies"] = [menu_natural]
 
         conversation.state = result["state"]
         if result.get("customer_name"):
