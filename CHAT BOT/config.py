@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
     # Vision: analisis de imagenes (fotos, planos, croquis)
-    groq_vision_model: str = "llama-3.2-11b-vision-preview"
+    groq_vision_model: str = "qwen/qwen3.6-27b"
     # Transcipcion de notas de voz
     groq_stt_model: str = "whisper-large-v3"
 

@@ -176,11 +176,13 @@ def _extract_pdf_text(media_bytes: bytes) -> str:
     return "\n".join(pages).strip()
 
 
-def _transcribe_audio(media_bytes: bytes) -> str:
+def _transcribe_audio(media_bytes: bytes, mime: str = "") -> str:
     """Transcribe una nota de voz con Whisper de Groq."""
+    ext = "mp3" if mime and "mp3" in mime else "ogg" if mime and "ogg" in mime else "mp4"
+    mime_type = mime or "audio/ogg"
     response = _client().audio.transcriptions.create(
         model=settings.groq_stt_model,
-        file=("audio.ogg", media_bytes, "audio/ogg"),
+        file=(f"audio.{ext}", media_bytes, mime_type),
         language="es",
     )
     return (response.text or "").strip()
@@ -196,10 +198,10 @@ def _image_part(media_bytes: bytes) -> dict:
     }
 
 
-def _media_reply(user_text: str, media_type: str, media_bytes: bytes) -> str:
+def _media_reply(user_text: str, media_type: str, media_bytes: bytes, media_mime: str = "") -> str:
     """Genera una respuesta para un mensaje multimedia."""
     if media_type == "audio":
-        transcript = _transcribe_audio(media_bytes)
+        transcript = _transcribe_audio(media_bytes, media_mime)
         if not transcript:
             return (
                 "No pude entender la nota de voz. Intenta de nuevo "
@@ -258,6 +260,7 @@ def generate_reply(
     user_text: str,
     media_type: str | None = None,
     media_bytes: bytes | None = None,
+    media_mime: str = "",
 ) -> str:
     """Genera una respuesta de Groq.
 
@@ -266,13 +269,14 @@ def generate_reply(
         user_text: Mensaje de texto del usuario (puede estar vacio si hay media).
         media_type: "image", "audio" o "document" (opcional).
         media_bytes: Contenido binario del archivo (opcional).
+        media_mime: Tipo MIME del archivo (opcional).
 
     Returns:
         La respuesta de Groq como texto, o un mensaje de error controlado.
     """
     try:
         if media_type and media_bytes:
-            return _media_reply(user_text, media_type, media_bytes)
+            return _media_reply(user_text, media_type, media_bytes, media_mime)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},

@@ -54,11 +54,14 @@ app = FastAPI(title="OCA WhatsApp Chatbot", version="1.0.0", lifespan=lifespan)
 
 # CORS: permite que la web (panel y formulario) consulte la API del bot
 _cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+# El panel local (file://) envia Origin: null; se incluye para poder abrirlo sin servidor web
+if "null" not in _cors_origins:
+    _cors_origins.append("null")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -116,21 +119,22 @@ def _inbound_text(msg: dict) -> str | None:
 
 
 def _inbound_media(msg: dict) -> dict | None:
-    """Extrae el identificador del archivo multimedia entrante, si existe.
+    """Extrae la informacion del archivo multimedia entrante, si existe.
 
-    YCloud puede enviar el media bajo la clave del tipo de mensaje
-    (image/audio/document) y/o bajo la clave "media". Devolvemos:
-    {"type": "image"|"audio"|"document", "mime": str} o None.
+    YCloud envia el archivo bajo la clave del tipo de mensaje (image/audio/
+    document/video) con un campo ``link`` descargable directamente (requiere
+    el header ``X-API-Key``). Devuelve:
+    {"link": str, "type": str, "mime": str} o None.
     """
     msg_type = msg.get("type")
     if msg_type not in ("image", "audio", "document", "video"):
         return None
     media_obj = msg.get("media") or msg.get(msg_type) or {}
-    media_id = media_obj.get("id") or media_obj.get("media_id")
-    if not media_id:
+    link = media_obj.get("link") or media_obj.get("url")
+    if not link:
         return None
     return {
-        "id": media_id,
+        "link": link,
         "type": "audio" if msg_type == "audio" else "image" if msg_type == "image" else "document",
         "mime": media_obj.get("mimeType") or media_obj.get("mime_type") or "",
     }
@@ -171,7 +175,7 @@ def _process_event(payload: dict) -> None:
     media_bytes: bytes | None = None
     if media:
         try:
-            media_bytes = asyncio.run(ycloud_client.download_media(media["id"]))
+            media_bytes = asyncio.run(ycloud_client.download_media(media["link"]))
         except Exception:
             logger.exception("Fallo al descargar media de %s", phone)
             media = None
@@ -224,6 +228,7 @@ def _process_event(payload: dict) -> None:
                 text or "",
                 media_type=media["type"],
                 media_bytes=media_bytes,
+                media_mime=media["mime"],
             )
             result = {
                 "replies": [reply],
