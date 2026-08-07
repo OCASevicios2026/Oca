@@ -12,6 +12,7 @@ Se configura con GROQ_API_KEY, GROQ_MODEL, GROQ_VISION_MODEL y GROQ_STT_MODEL.
 import base64
 import io
 import logging
+import re
 from functools import lru_cache
 
 import pypdf
@@ -30,6 +31,20 @@ def _client() -> Groq:
     return Groq(api_key=settings.groq_api_key)
 
 
+def _clean_reasoning(text: str) -> str:
+    """Elimina los bloques de razonamiento interno del modelo (``<think>...``).
+
+    Modelos 'thinking' de Groq (p. ej. qwen/qwen3.6-27b) incluyen su
+    proceso interno en etiquetas ``<think>``; ese texto no debe mostrarse
+    al cliente.
+    """
+    if not text:
+        return text
+    text = re.sub(r"<\s*think\b[^>]*>.*?</\s*think\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\s*/?\s*think\s*>", "", text, flags=re.DOTALL)
+    return text.strip()
+
+
 def _run(messages: list[dict], model: str | None = None, temperature: float = 0.7, max_tokens: int = 1024) -> str:
     """Ejecuta un chat completion y devuelve el texto de la respuesta."""
     response = _client().chat.completions.create(
@@ -38,7 +53,7 @@ def _run(messages: list[dict], model: str | None = None, temperature: float = 0.
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    return (response.choices[0].message.content or "").strip()
+    return _clean_reasoning(response.choices[0].message.content or "").strip()
 
 
 def _build_history(history: list[dict]) -> list[dict]:
