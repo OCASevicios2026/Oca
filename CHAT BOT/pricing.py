@@ -80,7 +80,7 @@ SERVICE_KEYWORDS: dict[str, list[str]] = {
         "pavimento", "adoquin", "subbase", "caliche",
     ],
     "7": [  # Impermeabilizacion
-        "impermeabilizacion", "torta desnivel",
+        "impermeabilizacion",
     ],
     "8": [  # Acabados y Mamposteria
         "levant", "panete", "estucado", "pintura", "enchape", "piso",
@@ -186,9 +186,9 @@ def build_quote_text(service_key: str, cantidad: float) -> str:
         lines.append(f"Estimado total: *{format_cop(result['min_total'])}*.")
     lines.append("")
     lines.append(
-        "Estos precios son de referencia (promedio nacional, edición 2026) y "
-        "no incluyen IVA ni costos administrativos. Un asesor te confirmará la "
-        "cotización formal según tu proyecto."
+        "Valores de referencia (APUs SISPAC, edición vigente No. 206, "
+        "Enero-Febrero 2026). No incluye AIU ni costos indirectos. Un asesor te "
+        "confirmará la cotización formal según tu proyecto."
     )
     return "\n".join(lines)
 
