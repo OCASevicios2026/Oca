@@ -359,6 +359,17 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
 
     # --- Estado dentro de un servicio: espera SI/NO ---
     if state.startswith("service:"):
+        service_key = state.split(":")[1]
+        # Si pide cotizacion explicitamente, ir al flujo de cotizacion (ciudad -> metraje)
+        if _has_any(normalized, INTENT_QUOTE):
+            return {
+                "replies": [
+                    "Perfecto. ¿Desde qué ciudad necesitas la cotización? (ej: Barranquilla, Santa Marta, Bogotá)"
+                ],
+                "state": f"awaiting_city:{service_key}:auto|",
+                "customer_name": customer_name,
+                "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+            }
         if _has_any(normalized, INTENT_YES):
             lead_service = {"service": MENU_OPTIONS[state.split(":")[1]]["name"]}
             if customer_name:
