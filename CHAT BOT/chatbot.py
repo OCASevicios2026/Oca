@@ -147,7 +147,7 @@ def _extract_service_key(text: str) -> str | None:
     aliases = {
         "1": ("consultor", "diseno", "viabilidad"),
         "2": ("metalica", "metal", "soldadura", "acero", "estructura", "ventana", "aluminio", "vidrio", "rejas", "cerramiento"),
-        "3": ("urbanismo", "alcantarillado", "manjol", "aguas lluvias", "red de urbanismo"),
+        "3": ("urbanismo", "alcantarillado", "manjol", "aguas lluvias", "red de urbanismo", "tuberia", "tuberias", "tubo"),
         "4": ("hidraulica", "sanitarias", "macromedidor", "micromedidor", "aguas"),
         "5": ("incendio", "incendios", "hidrante", "rociador", "bombeo"),
         "6": ("via", "vias", "pavimento", "adoquin", "concreto"),
@@ -155,6 +155,10 @@ def _extract_service_key(text: str) -> str | None:
         "8": ("acabado", "mamposteria", "estuco", "pintura", "muros", "panete", "fachada"),
         "9": ("aire", " ac ", "clima", "acondicionado", "minisplit"),
     }
+    # "TB" (tuberias/acueductos) se busca con limite de palabra para no
+    # confundirse con letras sueltas (ej: 'tabla', 'sobre')
+    if re.search(r"(?<![a-z])tb(?![a-z])", text):
+        return "3"
     for key, words in aliases.items():
         if _has_any(text, words):
             return key

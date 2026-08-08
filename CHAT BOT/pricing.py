@@ -294,8 +294,11 @@ def search_activities(service_key: str, limit: int = 6, query: str | None = None
                 continue
             seen.add(item["codigo"])
             results.append((score, extra_score, item))
-    # Prioriza coincidencias del servicio (score), luego las del cliente
-    results.sort(key=lambda t: (-t[0], -t[1], t[2]["precio"]))
+    # Prioriza las coincidencias con el texto del cliente (extra_score); con
+    # empate, las del servicio (score). Con la raiz (ventanas->ventana) esto
+    # ubica las Ventanas antes que los cielorasos solo por 'aluminio', y las
+    # Tuberias antes que los Colectores por 'tuberia'.
+    results.sort(key=lambda t: (-t[1], -t[0], t[2]["precio"]))
     return [item for _, _, item in results[:limit]]
 
 
