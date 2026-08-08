@@ -203,6 +203,19 @@ _STOPWORDS = frozenset(
 )
 
 
+# Palabras de ciudades (para que no contaminen las keywords del estado ni la busqueda)
+_CITY_WORDS = frozenset(
+    w for aliases in CITY_ALIASES.values() for a in aliases for w in a.split()
+)
+
+
+def _stem(word: str) -> str:
+    """Raiz simple en espanol: 'ventanas' -> 'ventana', 'obras' -> 'obra'."""
+    if len(word) > 4 and word.endswith("s"):
+        return word[:-1]
+    return word
+
+
 def extract_query_keywords(query: str | None) -> str:
     """Extrae las palabras utiles de la consulta del cliente (max ~36 chars).
 
@@ -214,7 +227,7 @@ def extract_query_keywords(query: str | None) -> str:
     words = []
     for w in _norm(query).replace(",", " ").split():
         w = w.strip(".")
-        if len(w) <= 3 or w in _STOPWORDS or re.fullmatch(r"\d+([.,]\d+)?", w):
+        if len(w) <= 3 or w in _STOPWORDS or w in _CITY_WORDS or re.fullmatch(r"\d+([.,]\d+)?", w):
             continue
         if w not in words:
             words.append(w)
@@ -258,10 +271,11 @@ def search_activities(service_key: str, limit: int = 6, query: str | None = None
     if not keywords:
         return []
     norm_kws = [_norm(k) for k in keywords]
-    extra_kws = [_norm(w) for w in (query or "").replace(",", " ").split()]
+    # Keywords del query del cliente, con raiz (ventanas -> ventana)
+    extra_kws = [_stem(_norm(w)) for w in (query or "").replace(",", " ").split()]
     extra_kws = [w for w in extra_kws if len(w) > 3 and w not in (
-        "cuanto", "cuesta", "cuantos", "necesito", "quiero", "saber", "por",
-        "para", "usted", "quiere", "una", "unos", "unas", "seria", "seria",
+        "cuanto", "cuest", "cuanto", "necesit", "quier", "saber", "por",
+        "para", "usted", "quiere", "una", "unos", "una", "seria",
     )]
     want_desmont = "desmont" in _norm(query or "")
     results = []
@@ -280,8 +294,8 @@ def search_activities(service_key: str, limit: int = 6, query: str | None = None
                 continue
             seen.add(item["codigo"])
             results.append((score, extra_score, item))
-    # Prioriza coincidencias con la consulta del cliente, luego las del servicio
-    results.sort(key=lambda t: (-t[1], -t[0], t[2]["precio"]))
+    # Prioriza coincidencias del servicio (score), luego las del cliente
+    results.sort(key=lambda t: (-t[0], -t[1], t[2]["precio"]))
     return [item for _, _, item in results[:limit]]
 
 
@@ -456,53 +470,123 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
         "linear": _cantidad_text(cantidad) + " ml",
         "volume": _cantidad_text(cantidad) + " m³",
     }[mode]
-    if result["city"]:
-        city_label = CITY_NAMES.get(result["city"], "promedio nacional")
-        header = f"*Cotización estimada en {city_label}* (para {cantidad_label}):"
-    else:
-        header = f"*Cotización estimada* (para {cantidad_label}):"
 
+    head = "Cotización estimada"
+    if result["city"]:
+        head += f" en {CITY_NAMES.get(result['city'], 'promedio nacional')}"
+    head += f" para {cantidad_label}"
+    qlabel = extract_query_keywords(query)
+    if qlabel:
+        head += f" de {qlabel}"
+    header = f"*{head}*:"
+
+    rows, per_h, qty_h = _quote_rows(result, mode, cantidad)
     lines = [
         header,
         "",
+        _build_table(rows, per_h, qty_h),
+        "",
     ]
-    for it in result["items"]:
-        detail = _item_detail(it, mode, cantidad)
-        lines.append(detail)
-    lines.append("")
-    if len(result["items"]) > 1:
-        lines.append(
-            f"Estimado total entre *{format_cop(result['min_total'])}* "
-            f"y *{format_cop(result['max_total'])}*."
-        )
-    else:
-        lines.append(f"Estimado total: *{format_cop(result['min_total'])}*.")
-    lines.append("")
+
+    # La opcion mas economica (por m² en area, por unidad en el resto)
+    best = min(rows, key=lambda r: r[1])
+    per_unit = {"area": "m²", "units": "unid.", "linear": "ml", "volume": "m³"}[mode]
     lines.append(
-        "Valores de referencia (APUs SISPAC, edición vigente No. 206, "
-        "Enero-Febrero 2026). No incluye AIU ni costos indirectos. Un asesor te "
-        "confirmará la cotización formal según tu proyecto."
+        f"*La opción más económica por {per_unit} es la {best[0]}, "
+        f"con aprox. {format_cop(best[1])}/{per_unit}.*"
+    )
+
+    nota = _rounding_note(result["items"], cantidad, mode)
+    if nota:
+        lines.extend(["", nota])
+    lines.extend(
+        [
+            "",
+            "Valores de referencia según APUs SISPAC No. 206, enero-febrero de 2026. "
+            "No incluyen AIU ni costos indirectos. La cotización final dependerá de las "
+            "especificaciones y condiciones del proyecto.",
+        ]
     )
     return "\n".join(lines)
 
 
-def _item_detail(it: dict, mode: str, cantidad: float) -> str:
-    """Describe una actividad dentro de la cotizacion segun el modo de cantidad."""
-    base = f"• {it['descripcion']} — {format_cop(it['precio'])} /{it['unidad']}"
-    area_m2 = it.get("area_m2")
-    if it["unidad"] == "UN" and area_m2 and mode == "area":
-        # Ej: Ventana 5020 200x100 (2 m² c/u) -> $285.628/m²
-        per_m2 = format_cop(it["precio_m2"])
-        units = it["units"]
-        units_text = _cantidad_text(units)
-        base = (
-            f"• {it['descripcion']} — {format_cop(it['precio'])} /UN "
-            f"({_format_area(area_m2)} m² c/u, ≈{per_m2} /m²) → {units_text} unid. "
-            f"(subtotal {format_cop(it['subtotal'])})"
-        )
+def _quote_rows(result: dict, mode: str, cantidad: float) -> tuple[list, str, str]:
+    """Filas de la tabla: (modelo, precio/m²|unid, cantidad, total) y cabeceras."""
+    rows: list = []
+    if mode == "area":
+        per_h, qty_h = "$/m²", "Cantidad"
+        for it in result["items"]:
+            if it["unidad"] == "UN" and it.get("area_m2"):
+                # Ej: Ventana 5020 300x150 3H (4,5 m² c/u): para 20 m² -> 5 unid (22,5 m²)
+                per = it["precio_m2"]
+                real = round(it["units"] * it["area_m2"], 3)
+                qty = f"{_cantidad_text(it['units'])} unid ({_format_area(real)} m²)"
+            else:
+                per = it["precio"]
+                qty = _format_area(cantidad) + " m²"
+            rows.append((it["descripcion"], per, qty, it["subtotal"]))
     else:
-        base = f"{base} (subtotal {format_cop(it['subtotal'])})"
-    return base
+        per_h = {"units": "$/unid", "linear": "$/ml", "volume": "$/m³"}[mode]
+        qty_h = "Cantidad"
+        unit_label = {"units": "unid", "linear": "ml", "volume": "m³"}[mode]
+        for it in result["items"]:
+            qty = f"{_cantidad_text(it['units'])} {unit_label}"
+            rows.append((it["descripcion"], it["precio"], qty, it["subtotal"]))
+    return rows, per_h, qty_h
+
+
+def _build_table(rows: list, per_h: str, qty_h: str, total_h: str = "Total", max_model: int = 30) -> str:
+    """Tabla en monospace (bloque ``` de WhatsApp) alineando columnas con espacios."""
+    modelo_w = min(max(len(r[0]) for r in rows) + 2, max_model)
+    per_w = max(len(per_h), *(len(format_cop(r[1])) for r in rows))
+    qty_w = max(len(qty_h), *(len(r[2]) for r in rows))
+    tot_w = max(len(total_h), *(len(format_cop(r[3])) for r in rows))
+
+    def row(modelo, per, qty, total):
+        if len(modelo) > max_model:
+            modelo = modelo[: max_model - 1] + "…"
+        return (
+            f"{modelo.ljust(modelo_w)}"
+            f"{format_cop(per).rjust(per_w)}  "
+            f"{qty.rjust(qty_w)}  "
+            f"{format_cop(total).rjust(tot_w)}"
+        )
+
+    header = (
+        f"{'Modelo'.ljust(modelo_w)}"
+        f"{per_h.rjust(per_w)}  "
+        f"{qty_h.rjust(qty_w)}  "
+        f"{total_h.rjust(tot_w)}"
+    )
+    data = [row(r[0], r[1], r[2], r[3]) for r in rows]
+    return "\n".join(["```", header, *data, "```"])
+
+
+def _rounding_note(items: list, cantidad: float, mode: str) -> str:
+    """Explica el redondeo a unidades completas cuando el area pedida no divide exacto.
+
+    Ej: para 20 m² de una ventana de 4,5 m² c/u se necesitan 5 unidades
+    (5 x 4,5 = 22,5 m²). Solo aplica al modo area con APUs UN dimensionados.
+    """
+    if mode != "area":
+        return ""
+    rounded = []
+    for it in items:
+        area = it.get("area_m2")
+        if it["unidad"] == "UN" and area:
+            real = round(it["units"] * area, 3)
+            if abs(real - cantidad) > 0.01:
+                rounded.append(
+                    f"la {it['descripcion']} ({_format_area(area)} m² c/u) necesita "
+                    f"{_cantidad_text(it['units'])} unidades, que suministran "
+                    f"{_format_area(real)} m²"
+                )
+    if not rounded:
+        return ""
+    return (
+        f"_Nota: para cubrir exactamente {_format_area(cantidad)} m², las cantidades "
+        f"se redondean a unidades completas: {'; '.join(rounded)}._"
+    )
 
 
 def _format_area(area: float) -> str:

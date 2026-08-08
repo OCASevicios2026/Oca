@@ -63,7 +63,7 @@ INTENT_CANCEL = ("cancelar", "cancelacion", "dejarlo", "salir", "empezar de nuev
 
 
 AREA_PATTERNS = (
-    r"(\d+(?:[.,]\d+)?)\s*(?:mts?\s*cuadrados?|m2|m²|m3|m³|metros?\s*cubicos?|metros?\s*cuadrados?|mts|metros?)",
+    r"(\d+(?:[.,]\d+)?)\s*(?:mts?\s*cuadrados?|m2|m²|m3|m³|metros?\s*cubicos?|metros?\s*cuadrados?|mts|metros?|ml|unid(?:ades)?|m\b)",
     r"(\d+(?:[.,]\d+)?)\s*(?:metros?)\b",
 )
 
