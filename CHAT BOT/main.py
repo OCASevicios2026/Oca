@@ -371,6 +371,24 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/pricing")
+def debug_pricing():
+    """Diagnostico: confirma que la base de costos cargo en el contenedor."""
+    import os
+    import pricing
+    exists = os.path.exists(pricing.CSV_PATH)
+    size = os.path.getsize(pricing.CSV_PATH) if exists else 0
+    return {
+        "csv_exists": exists,
+        "csv_size": size,
+        "activities": len(pricing.load_activities()),
+        "impermeabilizacion": [
+            {"descripcion": i["descripcion"], "precio": i["precio"], "unidad": i["unidad"]}
+            for i in pricing.search_activities("7")
+        ],
+    }
+
+
 async def _handle_webhook_request(
     request: Request,
     response: Response,

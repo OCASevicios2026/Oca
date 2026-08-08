@@ -101,7 +101,7 @@ def _extract_service_key(text: str) -> str | None:
             return key
     aliases = {
         "1": ("consultor", "diseno", "viabilidad"),
-        "2": ("metalica", "metal", "soldadura", "acero", "estructura"),
+        "2": ("metalica", "metal", "soldadura", "acero", "estructura", "ventana", "aluminio", "vidrio", "rejas", "cerramiento"),
         "3": ("urbanismo", "alcantarillado", "manjol", "aguas lluvias", "red de urbanismo"),
         "4": ("hidraulica", "sanitarias", "macromedidor", "micromedidor", "aguas"),
         "5": ("incendio", "incendios", "hidrante", "rociador", "bombeo"),
@@ -114,6 +114,42 @@ def _extract_service_key(text: str) -> str | None:
         if _has_any(text, words):
             return key
     return None
+
+
+def _try_quote(text: str, customer_name: str | None) -> dict | None:
+    """Si el texto pide una cotizacion de un servicio, devuelve el resultado.
+
+    Devuelve None si no hay intento de cotizacion o no se reconoce el servicio.
+    Si el mensaje ya incluye el metraje (ej: '50 m2'), cotiza directo; si no,
+    pasa al estado awaiting_area para pedir el metraje.
+    """
+    if not _has_any(normalize(text), INTENT_QUOTE):
+        return None
+    service_key = _extract_service_key(text)
+    if not service_key:
+        return None
+    area = _extract_area(text)
+    if area and area > 0:
+        quote_text = pricing.build_quote_text(service_key, area, query=text)
+        return {
+            "replies": [
+                service_detail(service_key),
+                quote_text,
+                "¿Te gustaría que un asesor te prepare la cotización formal?",
+            ],
+            "state": f"service:{service_key}",
+            "customer_name": customer_name,
+            "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+        }
+    return {
+        "replies": [
+            service_detail(service_key),
+            "Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3.",
+        ],
+        "state": f"awaiting_area:{service_key}|{text}",
+        "customer_name": customer_name,
+        "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+    }
 
 
 def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
@@ -136,6 +172,13 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
                 "customer_name": customer_name,
                 "lead": None,
             }
+
+    # Si el cliente pregunta un precio estando en medio de la captura de datos
+    # (nombre/detalles), responder con la cotizacion antes que cerrar el lead.
+    if state in ("awaiting_name", "awaiting_details"):
+        quote_result = _try_quote(text, customer_name)
+        if quote_result:
+            return quote_result
 
     # --- Estados de captura de datos ---
     if state == "awaiting_name":
@@ -162,11 +205,21 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     # --- Estado dentro de un servicio: espera SI/NO ---
     if state.startswith("service:"):
         if _has_any(normalized, INTENT_YES):
+            lead_service = {"service": MENU_OPTIONS[state.split(":")[1]]["name"]}
+            if customer_name:
+                return {
+                    "replies": [
+                        "Perfecto. Cuentanos brevemente tu proyecto o necesidad para pasarsela al asesor (por ejemplo, el tipo de servicio, el lugar y el alcance)."
+                    ],
+                    "state": "awaiting_details",
+                    "customer_name": customer_name,
+                    "lead": lead_service,
+                }
             return {
                 "replies": ["Perfecto. ¿Cual es tu nombre?"],
                 "state": "awaiting_name",
                 "customer_name": customer_name,
-                "lead": {"service": MENU_OPTIONS[state.split(":")[1]]["name"]},
+                "lead": lead_service,
             }
         if _has_any(normalized, INTENT_NO):
             return {
@@ -178,10 +231,10 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
 
     # --- Estado dentro de una cotizacion: espera el metraje (m2) ---
     if state.startswith("awaiting_area:"):
-        service_key = state.split(":", 1)[1]
+        service_key, _, query = state.split(":", 1)[1].partition("|")
         area = _extract_area(text) or _bare_number(text)
         if area and area > 0:
-            quote_text = pricing.build_quote_text(service_key, area)
+            quote_text = pricing.build_quote_text(service_key, area, query=query or None)
             return {
                 "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
                 "state": f"service:{service_key}",
@@ -190,8 +243,8 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
             }
         return {
             "replies": [
-                "Disculpa, necesito saber el metraje para calcularlo. "
-                "¿Cuántos metros cuadrados (m²) o metros lineales (ml) necesitas? Por ejemplo: 50 m2."
+                "Disculpa, necesito saber la cantidad para calcularlo. "
+                "¿Cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3."
             ],
             "state": state,
             "customer_name": customer_name,
@@ -258,30 +311,9 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         }
 
     if _has_any(normalized, INTENT_QUOTE):
-        service_key = _extract_service_key(text)
-        if service_key:
-            area = _extract_area(text)
-            if area and area > 0:
-                quote_text = pricing.build_quote_text(service_key, area)
-                return {
-                    "replies": [
-                        service_detail(service_key),
-                        quote_text,
-                        "¿Te gustaría que un asesor te prepare la cotización formal?",
-                    ],
-                    "state": f"service:{service_key}",
-                    "customer_name": customer_name,
-                    "lead": {"service": MENU_OPTIONS[service_key]["name"]},
-                }
-            return {
-                "replies": [
-                    service_detail(service_key),
-                    "Para calcular tu cotización, ¿cuántos metros cuadrados (m²) necesitas? Por ejemplo: 50 m2.",
-                ],
-                "state": f"awaiting_area:{service_key}",
-                "customer_name": customer_name,
-                "lead": {"service": MENU_OPTIONS[service_key]["name"]},
-            }
+        quote_result = _try_quote(text, customer_name)
+        if quote_result:
+            return quote_result
         return {
             "replies": ["Para cotizar, cuentanos primero cual es tu nombre."],
             "state": "awaiting_name",

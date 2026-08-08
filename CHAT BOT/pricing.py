@@ -66,8 +66,8 @@ def load_activities() -> list[dict]:
 # Palabras clave por servicio de OCA (indice de MENU_OPTIONS en knowledge.py)
 # Para ubicar las actividades del catalogo que corresponden a cada servicio.
 SERVICE_KEYWORDS: dict[str, list[str]] = {
-    "2": [  # Estructuras Metalicas
-        "cerramiento", "carpinteria metalica", "div ba",
+    "2": [  # Estructuras Metalicas / Carpinteria Metalica
+        "cerramiento", "carpinteria metalica", "div ba", "ventana",
     ],
     "3": [  # Redes de Urbanismo
         "registro", "alcantarillado", "aguas lluvias", "colector", "manjol", "tuberia",
@@ -89,28 +89,43 @@ SERVICE_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def search_activities(service_key: str, limit: int = 6) -> list[dict]:
-    """Devuelve actividades del catalogo relevantes para un servicio de OCA."""
+def search_activities(service_key: str, limit: int = 6, query: str | None = None) -> list[dict]:
+    """Devuelve actividades del catalogo relevantes para un servicio de OCA.
+
+    ``query`` es el texto libre del cliente (ej: 'ventana de aluminio'); las
+    actividades cuyo nombre coincida con esas palabras se priorizan, para que
+    una ventana no muestre cerramientos ni desmontes.
+    """
     keywords = SERVICE_KEYWORDS.get(service_key)
     if not keywords:
         return []
     norm_kws = [_norm(k) for k in keywords]
+    extra_kws = [_norm(w) for w in (query or "").replace(",", " ").split()]
+    extra_kws = [w for w in extra_kws if len(w) > 3 and w not in (
+        "cuanto", "cuesta", "cuantos", "necesito", "quiero", "saber", "por",
+        "para", "usted", "quiere", "una", "unos", "unas", "seria", "seria",
+    )]
+    want_desmont = "desmont" in _norm(query or "")
     results = []
     seen: set[str] = set()
     for item in load_activities():
         desc = _norm(item["descripcion"])
+        if "desmont" in desc and not want_desmont:
+            continue
         score = sum(1 for kw in norm_kws if kw in desc)
-        if score:
+        extra_score = sum(1 for kw in extra_kws if kw in desc)
+        if score or extra_score:
             key = (desc, item["unidad"])
             if key in seen:
                 continue
             seen.add(key)
-            results.append((score, item))
-    results.sort(key=lambda t: (-t[0], t[1]["precio"]))
-    return [item for _, item in results[:limit]]
+            results.append((score, extra_score, item))
+    # Prioriza coincidencias con la consulta del cliente, luego las del servicio
+    results.sort(key=lambda t: (-t[1], -t[0], t[2]["precio"]))
+    return [item for _, _, item in results[:limit]]
 
 
-def quote(service_key: str, cantidad: float, city: str | None = None) -> dict:
+def quote(service_key: str, cantidad: float, city: str | None = None, query: str | None = None) -> dict:
     """Calcula una cotizacion estimada para un servicio con una cantidad.
 
     Devuelve:
@@ -122,7 +137,7 @@ def quote(service_key: str, cantidad: float, city: str | None = None) -> dict:
       "has_prices": bool,
     }
     """
-    items = search_activities(service_key)
+    items = search_activities(service_key, query=query)
     computed = []
     for it in items:
         computed.append(
@@ -158,9 +173,9 @@ def format_cop(value: float) -> str:
     return "${:,.0f}".format(round(value)).replace(",", ".")
 
 
-def build_quote_text(service_key: str, cantidad: float) -> str:
+def build_quote_text(service_key: str, cantidad: float, query: str | None = None) -> str:
     """Arma el texto de cotizacion en prosa para enviar por WhatsApp."""
-    result = quote(service_key, cantidad)
+    result = quote(service_key, cantidad, query=query)
     if not result["has_prices"]:
         return (
             "Todavía no tengo precios de referencia para este servicio en mi base de costos. "
@@ -168,7 +183,7 @@ def build_quote_text(service_key: str, cantidad: float) -> str:
         )
 
     lines = [
-        f"*Cotización estimada* ({_cantidad_text(cantidad)}):",
+        f"*Cotización estimada* (para {_cantidad_text(cantidad)}):",
         "",
     ]
     for it in result["items"]:
@@ -196,5 +211,5 @@ def build_quote_text(service_key: str, cantidad: float) -> str:
 def _cantidad_text(cantidad: float) -> str:
     cantidad = round(cantidad, 2)
     if cantidad == int(cantidad):
-        return f"{int(cantidad)} m²"
-    return f"{cantidad:.2f} m²"
+        return str(int(cantidad))
+    return f"{cantidad:.2f}".replace(".", ",")
