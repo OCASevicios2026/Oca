@@ -10,6 +10,7 @@ Los precios son de referencia (promedio nacional). No incluyen AIU ni IVA.
 """
 
 import csv
+import math
 import re
 import unicodedata
 from functools import lru_cache
@@ -20,6 +21,22 @@ SHEET = "CALCULADORA"
 
 # Unidades que se consideran "por area" para pedir metraje
 AREA_UNITS = ("M2",)
+
+# Dimensiones expresadas en el nombre del APU, en cm: 'Ventana 5020 200x100' -> 200x100 cm
+DIM_RE = re.compile(r"(\d{2,4})\s*[x×]\s*(\d{2,4})")
+
+
+def parse_dimensions_m2(desc: str) -> float | None:
+    """Area (m2) a partir de las dimensiones en el nombre (en cm).
+
+    'Ventana 5020 200x100' -> 200 cm x 100 cm = 2.0 m2
+    'Ventana 5020 300x150 3H' -> 300 cm x 150 cm = 4.5 m2
+    """
+    m = DIM_RE.search(desc or "")
+    if not m:
+        return None
+    w_cm, h_cm = int(m.group(1)), int(m.group(2))
+    return round((w_cm / 100.0) * (h_cm / 100.0), 3)
 
 
 def _norm(text: str) -> str:
@@ -73,7 +90,7 @@ _STOPWORDS = frozenset(
 
 
 def extract_query_keywords(query: str | None) -> str:
-    """Extrae las palabras utiles de la consulta del cliente (max ~50 chars).
+    """Extrae las palabras utiles de la consulta del cliente (max ~36 chars).
 
     Se guarda en el campo ``state`` de la BD (VARCHAR(60)), por eso debe ser
     corto: 'ventana de aluminio por m2' -> 'ventana aluminio'.
@@ -87,7 +104,7 @@ def extract_query_keywords(query: str | None) -> str:
             continue
         if w not in words:
             words.append(w)
-    return " ".join(words)[:48]
+    return " ".join(words)[:36]
 
 
 # Palabras clave por servicio de OCA (indice de MENU_OPTIONS en knowledge.py)
@@ -152,27 +169,84 @@ def search_activities(service_key: str, limit: int = 6, query: str | None = None
     return [item for _, _, item in results[:limit]]
 
 
-def quote(service_key: str, cantidad: float, city: str | None = None, query: str | None = None) -> dict:
+def _resolve_unit_mode(mode: str | None, items: list[dict]) -> str:
+    """Decide el modo de cantidad ("area"|"units"|"linear") cuando no se indica.
+
+    Si la consulta no aclara la unidad, se infiere por las actividades que
+    coinciden: M2 -> area, UN -> units, ML -> linear.
+    """
+    if mode in ("area", "units", "linear"):
+        return mode
+    units = {it["unidad"] for it in items}
+    if "M2" in units:
+        return "area"
+    if "UN" in units:
+        return "units"
+    if "ML" in units:
+        return "linear"
+    return "area"
+
+
+def quote(
+    service_key: str,
+    cantidad: float,
+    city: str | None = None,
+    query: str | None = None,
+    unit: str | None = None,
+) -> dict:
     """Calcula una cotizacion estimada para un servicio con una cantidad.
+
+    `unit` controla como se interpreta la cantidad: "area" (m2), "units"
+    (unidades) o "linear" (metros lineales). Para actividades UN con
+    dimensiones en el nombre (ej: 'Ventana 5020 200x100'), el precio se
+    convierte a $/m2 y la cantidad en area se traduce al numero de unidades
+    necesarias.
 
     Devuelve:
     {
       "service_key": str,
       "cantidad": float,
-      "items": [{descripcion, unidad, precio, subtotal}],
+      "unit": str,
+      "items": [{descripcion, unidad, precio, area_m2, precio_m2, units, subtotal}],
       "min_total": float, "max_total": float,
       "has_prices": bool,
     }
     """
     items = search_activities(service_key, query=query)
+    mode = _resolve_unit_mode(unit, items)
     computed = []
     for it in items:
+        precio = round(it["precio"])
+        desc = it["descripcion"]
+        area_m2 = parse_dimensions_m2(desc) if it["unidad"] == "UN" else None
+        precio_m2 = round(precio / area_m2) if area_m2 else None
+
+        if it["unidad"] == "M2":
+            # La cantidad ya viene en m2
+            units = cantidad
+            subtotal = round(precio * cantidad)
+        elif it["unidad"] == "ML" or it["unidad"] == "ML2":
+            # La cantidad viene en metros lineales
+            units = cantidad
+            subtotal = round(precio * cantidad)
+        elif it["unidad"] == "UN" and area_m2 and mode == "area":
+            # Cantidad en m2 -> cuantas unidades cubren esa area
+            units = math.ceil(cantidad / area_m2)
+            subtotal = round(precio * units)
+        else:
+            # Unidades directas (o UN sin dimensiones)
+            units = cantidad
+            subtotal = round(precio * cantidad)
+
         computed.append(
             {
-                "descripcion": it["descripcion"],
+                "descripcion": desc,
                 "unidad": it["unidad"],
-                "precio": it["precio"],
-                "subtotal": round(it["precio"] * cantidad),
+                "precio": precio,
+                "area_m2": area_m2,
+                "precio_m2": precio_m2,
+                "units": units,
+                "subtotal": subtotal,
             }
         )
     if computed:
@@ -180,6 +254,7 @@ def quote(service_key: str, cantidad: float, city: str | None = None, query: str
         return {
             "service_key": service_key,
             "cantidad": cantidad,
+            "unit": mode,
             "items": computed,
             "min_total": min(precios),
             "max_total": max(precios),
@@ -188,6 +263,7 @@ def quote(service_key: str, cantidad: float, city: str | None = None, query: str
     return {
         "service_key": service_key,
         "cantidad": cantidad,
+        "unit": mode,
         "items": [],
         "min_total": 0,
         "max_total": 0,
@@ -200,24 +276,29 @@ def format_cop(value: float) -> str:
     return "${:,.0f}".format(round(value)).replace(",", ".")
 
 
-def build_quote_text(service_key: str, cantidad: float, query: str | None = None) -> str:
+def build_quote_text(service_key: str, cantidad: float, query: str | None = None, unit: str | None = None) -> str:
     """Arma el texto de cotizacion en prosa para enviar por WhatsApp."""
-    result = quote(service_key, cantidad, query=query)
+    result = quote(service_key, cantidad, query=query, unit=unit)
     if not result["has_prices"]:
         return (
             "Todavía no tengo precios de referencia para este servicio en mi base de costos. "
             "Puedo dejar tus datos a un asesor para que te prepare una cotización formal."
         )
 
+    mode = result["unit"]
+    cantidad_label = {
+        "area": _cantidad_text(cantidad) + " m²",
+        "units": _cantidad_text(cantidad) + " unid.",
+        "linear": _cantidad_text(cantidad) + " ml",
+    }[mode]
+
     lines = [
-        f"*Cotización estimada* (para {_cantidad_text(cantidad)}):",
+        f"*Cotización estimada* (para {cantidad_label}):",
         "",
     ]
     for it in result["items"]:
-        lines.append(
-            f"• {it['descripcion']} — {format_cop(it['precio'])} /{it['unidad']} "
-            f"(subtotal {format_cop(it['subtotal'])})"
-        )
+        detail = _item_detail(it, mode, cantidad)
+        lines.append(detail)
     lines.append("")
     if len(result["items"]) > 1:
         lines.append(
@@ -233,6 +314,32 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
         "confirmará la cotización formal según tu proyecto."
     )
     return "\n".join(lines)
+
+
+def _item_detail(it: dict, mode: str, cantidad: float) -> str:
+    """Describe una actividad dentro de la cotizacion segun el modo de cantidad."""
+    base = f"• {it['descripcion']} — {format_cop(it['precio'])} /{it['unidad']}"
+    area_m2 = it.get("area_m2")
+    if it["unidad"] == "UN" and area_m2 and mode == "area":
+        # Ej: Ventana 5020 200x100 (2 m² c/u) -> $285.628/m²
+        per_m2 = format_cop(it["precio_m2"])
+        units = it["units"]
+        units_text = _cantidad_text(units)
+        base = (
+            f"• {it['descripcion']} — {format_cop(it['precio'])} /UN "
+            f"({_format_area(area_m2)} m² c/u, ≈{per_m2} /m²) → {units_text} unid. "
+            f"(subtotal {format_cop(it['subtotal'])})"
+        )
+    else:
+        base = f"{base} (subtotal {format_cop(it['subtotal'])})"
+    return base
+
+
+def _format_area(area: float) -> str:
+    """Formatea un area en m2 (1.0 -> 1, 4.5 -> 4,5)."""
+    if area == int(area):
+        return str(int(area))
+    return f"{area:.2f}".replace(".", ",").rstrip("0").rstrip(",")
 
 
 def _cantidad_text(cantidad: float) -> str:

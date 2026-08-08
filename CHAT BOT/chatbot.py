@@ -92,6 +92,30 @@ def _bare_number(text: str) -> float | None:
     return None
 
 
+def _extract_unit_mode(text: str) -> str | None:
+    """Detecta si el usuario pide la cantidad en m2, ml o unidades.
+
+    Se revisa en orden de prioridad: area, lineal, unidades. Debe ejecutarse
+    antes de detectar 'ventana'/'unidad' para que 'ventana por m2' sea area.
+    """
+    t = normalize(text)
+    if _has_any(t, ("m2", "m²", "metro cuadrado", "metros cuadrados", "metros cuadrado", "mt2")):
+        return "area"
+    if _has_any(t, ("metro lineal", "metros lineales", "lineal")) or re.search(r"\bml\b", t):
+        return "linear"
+    if _has_any(t, ("unidad", "unid", "ventana", "pieza", "piezas")):
+        return "units"
+    return None
+
+
+def _parse_awaiting_area(state: str) -> tuple[str, str, str]:
+    """Parseo de 'awaiting_area:2:area|keywords' -> (service_key, mode, keywords)."""
+    payload = state.split(":", 1)[1]
+    key_part, _, keywords = payload.partition("|")
+    key, _, mode = key_part.partition(":")
+    return key, mode or "auto", keywords
+
+
 def _extract_service_key(text: str) -> str | None:
     """Intenta adivinar el servicio por texto libre (ej: 'quiero cotizar el A/C')."""
     text = normalize(text)
@@ -128,9 +152,10 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
     service_key = _extract_service_key(text)
     if not service_key:
         return None
+    unit_mode = _extract_unit_mode(text) or "auto"
     area = _extract_area(text)
     if area and area > 0:
-        quote_text = pricing.build_quote_text(service_key, area, query=text)
+        quote_text = pricing.build_quote_text(service_key, area, query=text, unit=unit_mode)
         return {
             "replies": [
                 service_detail(service_key),
@@ -146,7 +171,7 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
             service_detail(service_key),
             "Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3.",
         ],
-        "state": f"awaiting_area:{service_key}|{pricing.extract_query_keywords(text)}",
+        "state": f"awaiting_area:{service_key}:{unit_mode}|{pricing.extract_query_keywords(text)}",
         "customer_name": customer_name,
         "lead": {"service": MENU_OPTIONS[service_key]["name"]},
     }
@@ -231,10 +256,11 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
 
     # --- Estado dentro de una cotizacion: espera el metraje (m2) ---
     if state.startswith("awaiting_area:"):
-        service_key, _, query = state.split(":", 1)[1].partition("|")
+        service_key, stored_mode, query = _parse_awaiting_area(state)
         area = _extract_area(text) or _bare_number(text)
+        unit_mode = _extract_unit_mode(text) or stored_mode or "auto"
         if area and area > 0:
-            quote_text = pricing.build_quote_text(service_key, area, query=query or None)
+            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode)
             return {
                 "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
                 "state": f"service:{service_key}",
