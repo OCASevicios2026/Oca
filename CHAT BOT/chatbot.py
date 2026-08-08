@@ -9,6 +9,7 @@ import unicodedata
 
 from config import settings
 from knowledge import BUSINESS_INFO, MENU_OPTIONS
+import pricing
 
 # Respuesta generica cuando las reglas no reconocen el mensaje.
 # main.py detecta esta respuesta para delegar la conversacion a Gemini.
@@ -53,12 +54,42 @@ INTENT_HI = ("hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", 
 INTENT_MENU = ("menu", "opciones", "catalogo", "servicios", "servicio", "que hacen", "que ofrecen", "ayuda")
 INTENT_CONTACT = ("contacto", "telefono", "whatsapp", "direccion", "ubicacion", "donde", "nit", "correo")
 INTENT_HOURS = ("horario", "horas", "atienden", "cuando atienden")
-INTENT_QUOTE = ("cotizar", "cotizacion", "presupuesto", "precio", "tarifa", "costo", "cuanto cuesta")
+INTENT_QUOTE = ("cotizar", "cotizo", "cotizame", "cotiza", "cotizacion", "presupuesto", "precio", "tarifa", "costo", "cuanto cuesta")
 INTENT_HUMAN = ("asesor", "persona", "humano", "agente", "hablar con alguien", "un tecnico", "atencio")
 INTENT_YES = ("si", "sip", "claro", "perfecto", "dale", "ok", "bueno", "sale", "confirmar")
 INTENT_NO = ("no", "nop", "no gracias", "ahora no", "despues")
 INTENT_THANKS = ("gracias", "muchas gracias", "genial", "excelente", "vale", "ok perfecto")
 INTENT_CANCEL = ("cancelar", "cancelacion", "dejarlo", "salir", "empezar de nuevo", "olvidalo", "deja asi")
+
+
+AREA_PATTERNS = (
+    r"(\d+(?:[.,]\d+)?)\s*(?:mts?\s*cuadrados?|m2|m²|metros?\s*cuadrados?|mts|metros?)",
+    r"(\d+(?:[.,]\d+)?)\s*(?:metros?)\b",
+)
+
+
+def _extract_area(text: str) -> float | None:
+    """Extrae el metraje (m2) de un mensaje, p.ej. '50 m2' -> 50.0."""
+    text = text.lower().replace(",", ".")
+    for pattern in AREA_PATTERNS:
+        m = re.search(pattern, text)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _bare_number(text: str) -> float | None:
+    """Numero suelto (ej: '50') que usa el estado awaiting_area."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*", text.lower().replace(",", "."))
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+    return None
 
 
 def _extract_service_key(text: str) -> str | None:
@@ -92,7 +123,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     # --- Comandos de escape: permiten salir de los flujos de captura ---
     # Si el usuario esta en medio de una cotizacion (pide nombre o detalles)
     # y escribe un comando general, se cancela la captura y se vuelve al menu.
-    if state in ("awaiting_name", "awaiting_details"):
+    if state in ("awaiting_name", "awaiting_details") or state.startswith("awaiting_area:"):
         if (
             _has_any(normalized, INTENT_CANCEL)
             or _has_any(normalized, INTENT_MENU)
@@ -144,6 +175,28 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
                 "customer_name": customer_name,
                 "lead": None,
             }
+
+    # --- Estado dentro de una cotizacion: espera el metraje (m2) ---
+    if state.startswith("awaiting_area:"):
+        service_key = state.split(":", 1)[1]
+        area = _extract_area(text) or _bare_number(text)
+        if area and area > 0:
+            quote_text = pricing.build_quote_text(service_key, area)
+            return {
+                "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
+                "state": f"service:{service_key}",
+                "customer_name": customer_name,
+                "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+            }
+        return {
+            "replies": [
+                "Disculpa, necesito saber el metraje para calcularlo. "
+                "¿Cuántos metros cuadrados (m²) o metros lineales (ml) necesitas? Por ejemplo: 50 m2."
+            ],
+            "state": state,
+            "customer_name": customer_name,
+            "lead": None,
+        }
 
     # --- Comandos generales ---
     if _has_any(normalized, INTENT_HUMAN):
@@ -207,12 +260,25 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     if _has_any(normalized, INTENT_QUOTE):
         service_key = _extract_service_key(text)
         if service_key:
+            area = _extract_area(text)
+            if area and area > 0:
+                quote_text = pricing.build_quote_text(service_key, area)
+                return {
+                    "replies": [
+                        service_detail(service_key),
+                        quote_text,
+                        "¿Te gustaría que un asesor te prepare la cotización formal?",
+                    ],
+                    "state": f"service:{service_key}",
+                    "customer_name": customer_name,
+                    "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+                }
             return {
                 "replies": [
                     service_detail(service_key),
-                    "Si quieres, te preparo la cotización. Solo dime tu nombre y teléfono.",
+                    "Para calcular tu cotización, ¿cuántos metros cuadrados (m²) necesitas? Por ejemplo: 50 m2.",
                 ],
-                "state": f"service:{service_key}",
+                "state": f"awaiting_area:{service_key}",
                 "customer_name": customer_name,
                 "lead": {"service": MENU_OPTIONS[service_key]["name"]},
             }
