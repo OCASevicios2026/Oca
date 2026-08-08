@@ -96,6 +96,14 @@ def _bare_number(text: str) -> float | None:
     return None
 
 
+def _cantidad_str(value: float) -> str:
+    """Numero como texto para guardar en el estado (ej: 50.5 -> '50.5')."""
+    value = round(value, 2)
+    if value == int(value):
+        return str(int(value))
+    return f"{value:.2f}".replace(".", ",")
+
+
 def _extract_unit_mode(text: str) -> str | None:
     """Detecta si el usuario pide la cantidad en m2, ml, m3 o unidades.
 
@@ -115,12 +123,18 @@ def _extract_unit_mode(text: str) -> str | None:
     return None
 
 
-def _parse_awaiting_area(state: str) -> tuple[str, str, str]:
-    """Parseo de 'awaiting_area:2:area|keywords' -> (service_key, mode, keywords)."""
+def _parse_awaiting_area(state: str) -> tuple[str, str, str, str]:
+    """Parseo de 'awaiting_area:2:area:barq|keywords' -> (service_key, mode, city, keywords).
+
+    Soporta el formato anterior sin ciudad: 'awaiting_area:2:area|keywords'.
+    """
     payload = state.split(":", 1)[1]
     key_part, _, keywords = payload.partition("|")
-    key, _, mode = key_part.partition(":")
-    return key, mode or "auto", keywords
+    parts = key_part.split(":")
+    key = parts[0]
+    mode = parts[1] if len(parts) > 1 else "auto"
+    city = parts[2] if len(parts) > 2 else ""
+    return key, mode, city, keywords
 
 
 def _extract_service_key(text: str) -> str | None:
@@ -152,7 +166,8 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
 
     Devuelve None si no hay intento de cotizacion o no se reconoce el servicio.
     Si el mensaje ya incluye el metraje (ej: '50 m2'), cotiza directo; si no,
-    pasa al estado awaiting_area para pedir el metraje.
+    pasa al estado awaiting_area para pedir el metraje. Si el cliente no
+    indicó la ciudad, primero se pregunta la ciudad (awaiting_city).
     """
     if not _has_any(normalize(text), INTENT_QUOTE):
         return None
@@ -161,8 +176,13 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
         return None
     unit_mode = _extract_unit_mode(text) or "auto"
     area = _extract_area(text)
-    if area and area > 0:
-        quote_text = pricing.build_quote_text(service_key, area, query=text, unit=unit_mode)
+    city_raw = pricing.normalize_city(text)
+    city = pricing.resolve_city(city_raw) if city_raw else None
+    keywords = pricing.extract_query_keywords(text)
+    city_short = pricing.CITY_SHORT.get(city, "") if city else ""
+
+    if area and area > 0 and city:
+        quote_text = pricing.build_quote_text(service_key, area, query=text, unit=unit_mode, city=city)
         return {
             "replies": [
                 service_detail(service_key),
@@ -173,12 +193,34 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
             "customer_name": customer_name,
             "lead": {"service": MENU_OPTIONS[service_key]["name"]},
         }
+    if area and area > 0:
+        # Ya tiene el metraje; solo falta la ciudad
+        return {
+            "replies": [
+                service_detail(service_key),
+                "¿Desde qué ciudad necesitas la cotización? (ej: Barranquilla, Santa Marta, Bogotá)",
+            ],
+            "state": f"awaiting_city:{service_key}:{unit_mode}:{_cantidad_str(area)}|{keywords}",
+            "customer_name": customer_name,
+            "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+        }
+    if city:
+        # Ya tiene la ciudad; falta el metraje
+        return {
+            "replies": [
+                service_detail(service_key),
+                "Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3.",
+            ],
+            "state": f"awaiting_area:{service_key}:{unit_mode}:{city_short}|{keywords}",
+            "customer_name": customer_name,
+            "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+        }
     return {
         "replies": [
             service_detail(service_key),
-            "Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3.",
+            "¿Desde qué ciudad necesitas la cotización? (ej: Barranquilla, Santa Marta, Bogotá)",
         ],
-        "state": f"awaiting_area:{service_key}:{unit_mode}|{pricing.extract_query_keywords(text)}",
+        "state": f"awaiting_city:{service_key}:{unit_mode}|{keywords}",
         "customer_name": customer_name,
         "lead": {"service": MENU_OPTIONS[service_key]["name"]},
     }
@@ -191,7 +233,7 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
     # --- Comandos de escape: permiten salir de los flujos de captura ---
     # Si el usuario esta en medio de una cotizacion (pide nombre o detalles)
     # y escribe un comando general, se cancela la captura y se vuelve al menu.
-    if state in ("awaiting_name", "awaiting_details") or state.startswith("awaiting_area:"):
+    if state in ("awaiting_name", "awaiting_details") or state.startswith("awaiting_area:") or state.startswith("awaiting_city:"):
         if (
             _has_any(normalized, INTENT_CANCEL)
             or _has_any(normalized, INTENT_MENU)
@@ -261,13 +303,54 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
                 "lead": None,
             }
 
+    # --- Estado dentro de una cotizacion: espera la ciudad ---
+    if state.startswith("awaiting_city:"):
+        service_key, stored_mode, city_short, query = _parse_awaiting_area(state)
+        # El estado puede traer el area ya pedida: awaiting_city:2:area:50|kw
+        area_known = None
+        if city_short and re.fullmatch(r"\d+(?:[.,]\d+)?", city_short):
+            area_known = float(city_short.replace(",", "."))
+            city_short = ""
+        city_raw = pricing.normalize_city(text)
+        if not city_raw:
+            # La respuesta no trae la ciudad: preguntar de nuevo
+            return {
+                "replies": [
+                    "¿Desde qué ciudad necesitas la cotización? (ej: Barranquilla, Santa Marta, Bogotá)"
+                ],
+                "state": state,
+                "customer_name": customer_name,
+                "lead": None,
+            }
+        city = pricing.resolve_city(city_raw)
+        unit_mode = _extract_unit_mode(text) or stored_mode or "auto"
+        area = area_known or _extract_area(text) or _bare_number(text)
+        if area and area > 0:
+            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode, city=city)
+            return {
+                "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
+                "state": f"service:{service_key}",
+                "customer_name": customer_name,
+                "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+            }
+        city_short = pricing.CITY_SHORT.get(city, "")
+        return {
+            "replies": [
+                "Perfecto. Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3."
+            ],
+            "state": f"awaiting_area:{service_key}:{unit_mode}:{city_short}|{query}",
+            "customer_name": customer_name,
+            "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+        }
+
     # --- Estado dentro de una cotizacion: espera el metraje (m2) ---
     if state.startswith("awaiting_area:"):
-        service_key, stored_mode, query = _parse_awaiting_area(state)
+        service_key, stored_mode, city_short, query = _parse_awaiting_area(state)
         area = _extract_area(text) or _bare_number(text)
         unit_mode = _extract_unit_mode(text) or stored_mode or "auto"
+        city = pricing.CITY_LONG.get(city_short) if city_short else None
         if area and area > 0:
-            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode)
+            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode, city=city)
             return {
                 "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
                 "state": f"service:{service_key}",

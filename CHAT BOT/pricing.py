@@ -19,6 +19,50 @@ from typing import Iterable
 CSV_PATH = "BASE DE DATOS.csv"
 SHEET = "CALCULADORA"
 
+# Columnas de precios por region en las hojas A.P.U. (verificadas contra el CSV)
+CITY_COLUMNS: dict[str, int] = {
+    "nacional": 8,   # Prom. Nacional (== precio de CALCULADORA)
+    "bogota": 10,
+    "medellin": 12,
+    "cali": 14,
+    "barranquilla": 16,
+}
+
+# Como se muestran las ciudades en la cotizacion
+CITY_NAMES: dict[str, str] = {
+    "nacional": "promedio nacional",
+    "bogota": "Bogotá",
+    "medellin": "Medellín",
+    "cali": "Cali",
+    "barranquilla": "Barranquilla",
+}
+
+# Codigos cortos para el campo `state` (VARCHAR(60)): 'barq', 'bog', etc.
+CITY_SHORT: dict[str, str] = {
+    "barranquilla": "barq",
+    "bogota": "bog",
+    "medellin": "med",
+    "cali": "cal",
+    "nacional": "nac",
+}
+CITY_LONG: dict[str, str] = {v: k for k, v in CITY_SHORT.items()}
+
+# Como se pide una ciudad (sin tildes, por normalize). Orden importa:
+# "santa marta" se busca antes de "marta" suelta.
+CITY_ALIASES: dict[str, tuple[str, ...]] = {
+    "santa marta": ("santa marta",),
+    "barranquilla": ("barranquilla", "barranquillero"),
+    "bogota": ("bogota",),
+    "medellin": ("medellin",),
+    "cali": ("cali",),
+    "nacional": ("nacional", "promedio", "colombia", "pais"),
+}
+
+# Ciudades que usan el precio de Barranquilla (OCA opera desde la costa)
+CITY_FALLBACK: dict[str, str] = {
+    "santa marta": "barranquilla",
+}
+
 # Unidades que se consideran "por area" para pedir metraje
 AREA_UNITS = ("M2",)
 
@@ -80,6 +124,74 @@ def load_activities() -> list[dict]:
     except FileNotFoundError:
         return []
     return items
+
+
+def normalize_city(text: str | None) -> str | None:
+    """Convierte la ciudad del cliente en la clave estandar (sin tildes).
+
+    'barranquilla', 'Barranquilla' -> 'barranquilla'
+    'santa marta', 'Santa Marta'   -> 'santa marta' (y se cotiza con Barranquilla)
+    'bogota'/'Bogota'              -> 'bogota'
+    Si no reconoce ninguna ciudad, devuelve None.
+    """
+    if not text:
+        return None
+    t = _norm(text)
+    for city, aliases in CITY_ALIASES.items():
+        for alias in aliases:
+            if alias in t:
+                return city
+    return None
+
+
+def resolve_city(city: str | None) -> str | None:
+    """Devuelve la ciudad cuyo precio debe usarse (aplica fallbacks).
+
+    'santa marta' -> 'barranquilla'. 'nacional' se conserva como tal.
+    """
+    if not city:
+        return None
+    return CITY_FALLBACK.get(city, city)
+
+
+@lru_cache(maxsize=1)
+def load_city_prices() -> dict[str, dict[str, float]]:
+    """Carga los precios por ciudad de las hojas A.P.U. del CSV.
+
+    Devuelve {codigo: {ciudad: precio}}. Solo considera ciudades con precio
+    valido; si una ciudad no tiene precio para un codigo, se usa el precio
+    base de CALCULADORA (nacional).
+    """
+    prices: dict[str, dict[str, float]] = {}
+    try:
+        with open(CSV_PATH, encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row or row[0] not in ("A.P.U. EDIFICACIONES", "A.P.U. OBRAS CIVILES"):
+                    continue
+                if not row[1] or not re.fullmatch(r"\d{4,6}", row[1].strip()):
+                    continue
+                codigo = row[1].strip()
+                entry: dict[str, float] = {}
+                for city, idx in CITY_COLUMNS.items():
+                    try:
+                        value = float(row[idx])
+                    except (ValueError, IndexError, TypeError):
+                        continue
+                    if value > 0:
+                        entry[city] = value
+                if entry:
+                    prices[codigo] = entry
+    except FileNotFoundError:
+        return {}
+    return prices
+
+
+def get_city_price(codigo: str, city: str | None) -> float | None:
+    """Precio de una actividad en la ciudad dada (o None si no hay dato)."""
+    if not city or city == "nacional":
+        return None
+    return load_city_prices().get(codigo, {}).get(city)
 
 
 # Palabras vacias que no aportan a la busqueda en el catalogo
@@ -229,9 +341,11 @@ def quote(
 ) -> dict:
     """Calcula una cotizacion estimada para un servicio con una cantidad.
 
+    `city` es la clave de ciudad (ej: 'barranquilla'); si la actividad tiene
+    precio para esa ciudad se usa ese valor, si no, el promedio nacional.
     `unit` controla como se interpreta la cantidad: "area" (m2), "units"
-    (unidades) o "linear" (metros lineales). Para actividades UN con
-    dimensiones en el nombre (ej: 'Ventana 5020 200x100'), el precio se
+    (unidades), "linear" (metros lineales) o "volume" (m3). Para actividades
+    UN con dimensiones en el nombre (ej: 'Ventana 5020 200x100'), el precio se
     convierte a $/m2 y la cantidad en area se traduce al numero de unidades
     necesarias.
 
@@ -240,6 +354,7 @@ def quote(
       "service_key": str,
       "cantidad": float,
       "unit": str,
+      "city": str | None,
       "items": [{descripcion, unidad, precio, area_m2, precio_m2, units, subtotal}],
       "min_total": float, "max_total": float,
       "has_prices": bool,
@@ -248,9 +363,11 @@ def quote(
     items = search_activities(service_key, query=query)
     mode = _resolve_unit_mode(unit, items)
     items = [it for it in items if _item_fits_mode(it, mode)]
+    city = resolve_city(city)
     computed = []
     for it in items:
-        precio = round(it["precio"])
+        city_precio = get_city_price(it["codigo"], city)
+        precio = round(city_precio) if city_precio else round(it["precio"])
         desc = it["descripcion"]
         area_m2 = parse_dimensions_m2(desc) if it["unidad"] == "UN" else None
         precio_m2 = round(precio / area_m2) if area_m2 else None
@@ -293,6 +410,7 @@ def quote(
             "service_key": service_key,
             "cantidad": cantidad,
             "unit": mode,
+            "city": city,
             "items": computed,
             "min_total": min(precios),
             "max_total": max(precios),
@@ -302,6 +420,7 @@ def quote(
         "service_key": service_key,
         "cantidad": cantidad,
         "unit": mode,
+        "city": city,
         "items": None,
         "min_total": 0,
         "max_total": 0,
@@ -314,9 +433,9 @@ def format_cop(value: float) -> str:
     return "${:,.0f}".format(round(value)).replace(",", ".")
 
 
-def build_quote_text(service_key: str, cantidad: float, query: str | None = None, unit: str | None = None) -> str:
+def build_quote_text(service_key: str, cantidad: float, query: str | None = None, unit: str | None = None, city: str | None = None) -> str:
     """Arma el texto de cotizacion en prosa para enviar por WhatsApp."""
-    result = quote(service_key, cantidad, query=query, unit=unit)
+    result = quote(service_key, cantidad, city=city, query=query, unit=unit)
     if not result["has_prices"]:
         if result["items"] is None:
             # Hay actividades, pero ninguna cotizable en esa unidad (ej: pedir
@@ -337,9 +456,14 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
         "linear": _cantidad_text(cantidad) + " ml",
         "volume": _cantidad_text(cantidad) + " m³",
     }[mode]
+    if result["city"]:
+        city_label = CITY_NAMES.get(result["city"], "promedio nacional")
+        header = f"*Cotización estimada en {city_label}* (para {cantidad_label}):"
+    else:
+        header = f"*Cotización estimada* (para {cantidad_label}):"
 
     lines = [
-        f"*Cotización estimada* (para {cantidad_label}):",
+        header,
         "",
     ]
     for it in result["items"]:
