@@ -270,6 +270,53 @@ def _media_reply(user_text: str, media_type: str, media_bytes: bytes, media_mime
     )
 
 
+def classify_service_from_image(media_bytes: bytes, user_text: str = "") -> str | None:
+    """Clasifica una imagen en uno de los 9 servicios de OCA.
+
+    Se usa cuando el cliente envia una foto (ej: un porton o cerca metalica)
+    y pide una cotizacion: el modelo de vision identifica a que servicio
+    corresponde y se inicia el flujo de cotizacion. Devuelve la clave del
+    servicio (str) o None si no lo identifica.
+    """
+    services = "\n".join(
+        f"{k}. {v['name']} - {v['desc'][:120]}" for k, v in MENU_OPTIONS.items()
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Eres un clasificador de imagenes para OCA Servicios Integrales "
+                "(empresa de construccion en Santa Marta, Colombia). Recibes la foto "
+                "de un cliente que quiere una cotizacion. Determina a cual de estos "
+                "servicios corresponde la imagen:\n"
+                f"{services}\n"
+                "Responde UNICAMENTE con el numero del servicio (1 a 9). "
+                "Si la imagen no corresponde a ninguno, responde 0."
+            ),
+        },
+        {
+            "role": "user",
+            "content": [
+                _image_part(media_bytes),
+                {"type": "text", "text": user_text or "¿Qué servicio es esta imagen?"},
+            ],
+        },
+    ]
+    try:
+        reply = _run(messages, model=settings.groq_vision_model, temperature=0.0, max_tokens=20)
+    except Exception:
+        logger.exception("Error al clasificar imagen en servicio")
+        return None
+    m = re.search(r"\b([1-9])\b", reply or "")
+    if m and m.group(1) in MENU_OPTIONS:
+        return m.group(1)
+    lowered = (reply or "").lower()
+    for key, svc in MENU_OPTIONS.items():
+        if svc["name"].lower() in lowered:
+            return key
+    return None
+
+
 def generate_reply(
     history: list[dict],
     user_text: str,

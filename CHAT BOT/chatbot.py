@@ -165,6 +165,26 @@ def _extract_service_key(text: str) -> str | None:
     return None
 
 
+def begin_quote(service_key: str, customer_name: str | None, query: str | None = None) -> dict:
+    """Inicia el flujo de cotizacion para un servicio ya identificado.
+
+    Se usa cuando el servicio se reconoce por otro medio (ej: una foto
+    clasificada por la IA). ``query`` son palabras clave que ayudan a
+    priorizar actividades (ej: 'cerramiento' para un porton). El resultado
+    equivale a _try_quote sin ciudad: pide la ciudad y luego el metraje.
+    """
+    keywords = pricing.extract_query_keywords(query or "")
+    return {
+        "replies": [
+            service_detail(service_key),
+            "¿Desde qué ciudad necesitas la cotización? (ej: Barranquilla, Santa Marta, Bogotá)",
+        ],
+        "state": f"awaiting_city:{service_key}:auto|{keywords}",
+        "customer_name": customer_name,
+        "lead": {"service": MENU_OPTIONS[service_key]["name"]},
+    }
+
+
 def _try_quote(text: str, customer_name: str | None) -> dict | None:
     """Si el texto pide una cotizacion de un servicio, devuelve el resultado.
 
@@ -435,8 +455,11 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         if quote_result:
             return quote_result
         return {
-            "replies": ["Para cotizar, cuentanos primero cual es tu nombre."],
-            "state": "awaiting_name",
+            "replies": [
+                "Con gusto te ayudo con la cotización. ¿Cuál de estos servicios necesitas?\n\n"
+                + build_menu()
+            ],
+            "state": "menu",
             "customer_name": customer_name,
             "lead": None,
         }

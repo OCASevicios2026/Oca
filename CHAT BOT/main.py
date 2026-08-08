@@ -265,19 +265,31 @@ def _process_event(payload: dict) -> None:
         # cuando el flujo por reglas no reconoce el mensaje (fallback).
         result = None
         if media is not None:
-            reply = ai.generate_reply(
-                history,
-                text or "",
-                media_type=media["type"],
-                media_bytes=media_bytes,
-                media_mime=media["mime"],
+            # Si la foto viene con pedido de cotizacion, se clasifica el
+            # servicio de la imagen y se inicia el flujo de cotizacion
+            # (ciudad -> metraje -> tabla de precios) en vez de solo
+            # describir la imagen.
+            wants_quote = text is not None and chatbot._has_any(
+                chatbot.normalize(text), chatbot.INTENT_QUOTE
             )
-            result = {
-                "replies": [reply],
-                "state": conversation.state,
-                "customer_name": conversation.customer_name,
-                "lead": None,
-            }
+            if wants_quote and media["type"] == "image":
+                service_key = ai.classify_service_from_image(media_bytes, text)
+                if service_key:
+                    result = chatbot.begin_quote(service_key, conversation.customer_name, query=text)
+            if result is None:
+                reply = ai.generate_reply(
+                    history,
+                    text or "",
+                    media_type=media["type"],
+                    media_bytes=media_bytes,
+                    media_mime=media["mime"],
+                )
+                result = {
+                    "replies": [reply],
+                    "state": conversation.state,
+                    "customer_name": conversation.customer_name,
+                    "lead": None,
+                }
         else:
             result = chatbot.handle_inbound(
                 text, conversation.state, conversation.customer_name
