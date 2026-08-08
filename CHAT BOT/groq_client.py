@@ -290,6 +290,11 @@ def classify_service_from_image(media_bytes: bytes, user_text: str = "") -> str 
                 "de un cliente que quiere una cotizacion. Determina a cual de estos "
                 "servicios corresponde la imagen:\n"
                 f"{services}\n"
+                "Pautas: un porton, cerca, reja o estructura metalica (incluidas "
+                "cercas de lamas, tubos o alambre) es el servicio 2 (Estructuras "
+                "Metalicas). Una terraza con humedad o techo es el 7 "
+                "(Impermeabilizacion). Un muro o fachada recien construido es el 8 "
+                "(Acabados y Mamposteria). Un plano de redes de agua es el 3 o 4. "
                 "Responde UNICAMENTE con el numero del servicio (1 a 9). "
                 "Si la imagen no corresponde a ninguno, responde 0."
             ),

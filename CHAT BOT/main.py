@@ -276,6 +276,19 @@ def _process_event(payload: dict) -> None:
                 service_key = ai.classify_service_from_image(media_bytes, text)
                 if service_key:
                     result = chatbot.begin_quote(service_key, conversation.customer_name, query=text)
+                else:
+                    # La foto no se reconocio en ningun servicio: preguntar cual
+                    # de los servicios es (menu) en vez de describir la imagen,
+                    # para no perder el hilo de la cotizacion.
+                    result = {
+                        "replies": [
+                            "Vi tu foto y puedo ayudarte con la cotización. "
+                            "¿Cuál de estos servicios necesitas?\n\n" + chatbot.build_menu()
+                        ],
+                        "state": "menu",
+                        "customer_name": conversation.customer_name,
+                        "lead": None,
+                    }
             if result is None:
                 reply = ai.generate_reply(
                     history,

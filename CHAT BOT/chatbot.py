@@ -67,13 +67,50 @@ AREA_PATTERNS = (
     r"(\d+(?:[.,]\d+)?)\s*(?:metros?)\b",
 )
 
+# "20 metros de largo y 4 de alto" -> largo y alto (se multiplican para el area)
+LARGO_ALTO_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:metros?|mts?|m)?\s*(?:de\s+)?largo(?:o)?\s*[y×x,]\s*"
+    r"(\d+(?:[.,]\d+)?)\s*(?:metros?|mts?|m)?\s*(?:de\s+)?(?:alto|altura)"
+)
+
+
+def _extract_largo_alto(text: str) -> float | None:
+    """Area (m2) cuando el cliente da largo y alto: '20 m de largo y 4 de alto'.
+
+    '20 metros de largo y 4 de alto' -> 80.0. Devuelve None si no los da.
+    """
+    text = text.lower().replace(",", ".")
+    m = LARGO_ALTO_RE.search(text)
+    if m:
+        try:
+            return float(m.group(1)) * float(m.group(2))
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_largo_alto_pair(text: str) -> tuple[float, float] | None:
+    """Devuelve (largo, alto) de '20 m de largo y 4 de alto', o None."""
+    text = text.lower().replace(",", ".")
+    m = LARGO_ALTO_RE.search(text)
+    if m:
+        try:
+            return float(m.group(1)), float(m.group(2))
+        except ValueError:
+            return None
+    return None
+
 
 def _extract_area(text: str) -> float | None:
     """Extrae una cantidad con unidad (m2, m3, ml, metros...) de un mensaje.
 
     '50 m2' -> 50.0, '30 m3' -> 30.0, '20 metros' -> 20.0. La unidad en si la
-    decide ``_extract_unit_mode``; aqui solo importa el numero.
+    decide ``_extract_unit_mode``; aqui solo importa el numero. Si el mensaje
+    da largo y alto ('20 m de largo y 4 de alto'), devuelve el area (80.0).
     """
+    area = _extract_largo_alto(text)
+    if area is not None:
+        return area
     text = text.lower().replace(",", ".")
     for pattern in AREA_PATTERNS:
         m = re.search(pattern, text)
@@ -104,6 +141,24 @@ def _cantidad_str(value: float) -> str:
     return f"{value:.2f}".replace(".", ",")
 
 
+def _resolve_largo_alto(service_key: str, largo: float, alto: float, query: str, city: str | None) -> tuple[float, str] | None:
+    """Cantidad y modo para un mensaje con largo y alto.
+
+    Si el servicio cotiza por m2 (impermeabilizacion, ventanas), el area es
+    largo x alto. Si cotiza por metro lineal (cerramientos/portones), se usa
+    el largo (los items ML no tienen altura). Devuelve (cantidad, modo) o
+    None si no se puede decidir.
+    """
+    area = round(largo * alto, 2)
+    q_area = pricing.quote(service_key, area, city=city, query=query, unit="area")
+    if q_area["has_prices"] and any(i["unidad"] == "M2" for i in q_area["items"]):
+        return area, "area"
+    q_linear = pricing.quote(service_key, largo, city=city, query=query, unit="linear")
+    if q_linear["has_prices"]:
+        return largo, "linear"
+    return area, "area"
+
+
 def _extract_unit_mode(text: str) -> str | None:
     """Detecta si el usuario pide la cantidad en m2, ml, m3 o unidades.
 
@@ -112,6 +167,8 @@ def _extract_unit_mode(text: str) -> str | None:
     sea area.
     """
     t = normalize(text)
+    if _extract_largo_alto(t) is not None:
+        return "area"
     if _has_any(t, ("m2", "m²", "metro cuadrado", "metros cuadrados", "metros cuadrado", "mt2")):
         return "area"
     if _has_any(t, ("m3", "m³", "metro cubico", "metros cubicos")):
@@ -146,7 +203,7 @@ def _extract_service_key(text: str) -> str | None:
             return key
     aliases = {
         "1": ("consultor", "diseno", "viabilidad"),
-        "2": ("metalica", "metal", "soldadura", "acero", "estructura", "ventana", "aluminio", "vidrio", "rejas", "cerramiento"),
+        "2": ("metalica", "metal", "soldadura", "acero", "estructura", "ventana", "aluminio", "vidrio", "rejas", "cerramiento", "porton", "portones", "cerca", "lamas"),
         "3": ("urbanismo", "alcantarillado", "manjol", "aguas lluvias", "red de urbanismo", "tuberia", "tuberias", "tubo"),
         "4": ("hidraulica", "sanitarias", "macromedidor", "micromedidor", "aguas"),
         "5": ("incendio", "incendios", "hidrante", "rociador", "bombeo"),
@@ -350,7 +407,12 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         unit_mode = _extract_unit_mode(text) or stored_mode or "auto"
         area = area_known or _extract_area(text) or _bare_number(text)
         if area and area > 0:
-            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode, city=city)
+            pair = _extract_largo_alto_pair(text)
+            if pair and not area_known:
+                cantidad, unit_mode = _resolve_largo_alto(service_key, pair[0], pair[1], query or "", city)
+            else:
+                cantidad = area
+            quote_text = pricing.build_quote_text(service_key, cantidad, query=query or None, unit=unit_mode, city=city)
             return {
                 "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
                 "state": f"service:{service_key}",
@@ -374,7 +436,12 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
         unit_mode = _extract_unit_mode(text) or stored_mode or "auto"
         city = pricing.CITY_LONG.get(city_short) if city_short else None
         if area and area > 0:
-            quote_text = pricing.build_quote_text(service_key, area, query=query or None, unit=unit_mode, city=city)
+            pair = _extract_largo_alto_pair(text)
+            if pair:
+                cantidad, unit_mode = _resolve_largo_alto(service_key, pair[0], pair[1], query or "", city)
+            else:
+                cantidad = area
+            quote_text = pricing.build_quote_text(service_key, cantidad, query=query or None, unit=unit_mode, city=city)
             return {
                 "replies": [quote_text, "¿Te gustaría que un asesor te prepare la cotización formal?"],
                 "state": f"service:{service_key}",
@@ -490,6 +557,16 @@ def handle_inbound(text: str, state: str, customer_name: str | None) -> dict:
             }
 
     # --- Texto libre: intentar detectar servicio ---
+    # Si el mensaje empieza con una negacion ('no, ...') es una respuesta a la
+    # pregunta anterior del flujo (ej: acabado de un porton), no la eleccion de
+    # un nuevo servicio: no cambiar de contexto por palabras como 'pintura'.
+    if re.match(r"^no\b(?:,|\.|\s|$)", normalized):
+        return {
+            "replies": [FALLBACK_REPLY],
+            "state": state,
+            "customer_name": customer_name,
+            "lead": None,
+        }
     service_key = _extract_service_key(text)
     if service_key:
         return {
