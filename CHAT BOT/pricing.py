@@ -63,6 +63,33 @@ def load_activities() -> list[dict]:
     return items
 
 
+# Palabras vacias que no aportan a la busqueda en el catalogo
+_STOPWORDS = frozenset(
+    "cuanto cuesta cuantos necesito quiero saber por para usted quiere una unos "
+    "unas seria serian del con sin sobre entre hasta donde cual cuales cuando "
+    "hacer hacerle hago una cotizacion cotizar presupuesto precio tarifa costo "
+    "queremos quisiera puedo puede me mi tu su de la el los las y o a e".split()
+)
+
+
+def extract_query_keywords(query: str | None) -> str:
+    """Extrae las palabras utiles de la consulta del cliente (max ~50 chars).
+
+    Se guarda en el campo ``state`` de la BD (VARCHAR(60)), por eso debe ser
+    corto: 'ventana de aluminio por m2' -> 'ventana aluminio'.
+    """
+    if not query:
+        return ""
+    words = []
+    for w in _norm(query).replace(",", " ").split():
+        w = w.strip(".")
+        if len(w) <= 3 or w in _STOPWORDS or re.fullmatch(r"\d+([.,]\d+)?", w):
+            continue
+        if w not in words:
+            words.append(w)
+    return " ".join(words)[:48]
+
+
 # Palabras clave por servicio de OCA (indice de MENU_OPTIONS en knowledge.py)
 # Para ubicar las actividades del catalogo que corresponden a cada servicio.
 SERVICE_KEYWORDS: dict[str, list[str]] = {

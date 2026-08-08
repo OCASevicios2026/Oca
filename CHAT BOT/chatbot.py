@@ -146,7 +146,7 @@ def _try_quote(text: str, customer_name: str | None) -> dict | None:
             service_detail(service_key),
             "Para calcular tu cotización, ¿cuántos metros cuadrados (m²), metros lineales (ml) o unidades necesitas? Por ejemplo: 50 m2 o 3.",
         ],
-        "state": f"awaiting_area:{service_key}|{text}",
+        "state": f"awaiting_area:{service_key}|{pricing.extract_query_keywords(text)}",
         "customer_name": customer_name,
         "lead": {"service": MENU_OPTIONS[service_key]["name"]},
     }
