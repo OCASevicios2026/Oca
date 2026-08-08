@@ -22,8 +22,9 @@ SHEET = "CALCULADORA"
 # Unidades que se consideran "por area" para pedir metraje
 AREA_UNITS = ("M2",)
 
-# Dimensiones expresadas en el nombre del APU, en cm: 'Ventana 5020 200x100' -> 200x100 cm
-DIM_RE = re.compile(r"(\d{2,4})\s*[x×]\s*(\d{2,4})")
+# Dimensiones expresadas en el nombre del APU, en cm: 'Ventana 5020 200x100' -> 200x100 cm.
+# Solo coincide con DOS dimensiones: '200x100' -> si, '50x50x50' (registro) -> no.
+DIM_RE = re.compile(r"(?<![\d.x×X])(\d{2,4})\s*[x×X]\s*(\d{2,4})(?!\s*[x×X])")
 
 
 def parse_dimensions_m2(desc: str) -> float | None:
@@ -31,6 +32,7 @@ def parse_dimensions_m2(desc: str) -> float | None:
 
     'Ventana 5020 200x100' -> 200 cm x 100 cm = 2.0 m2
     'Ventana 5020 300x150 3H' -> 300 cm x 150 cm = 4.5 m2
+    'Registro de 50x50x50' -> None (es una caja 3D, se vende por unidad)
     """
     m = DIM_RE.search(desc or "")
     if not m:
@@ -159,32 +161,63 @@ def search_activities(service_key: str, limit: int = 6, query: str | None = None
         score = sum(1 for kw in norm_kws if kw in desc)
         extra_score = sum(1 for kw in extra_kws if kw in desc)
         if score or extra_score:
-            key = (desc, item["unidad"])
-            if key in seen:
+            # Se deduplica por codigo: filas repetidas con el mismo APU no
+            # deben duplicarse, pero APUs distintos con igual descripcion
+            # (mismos materiales, precios diferentes) si deben aparecer.
+            if item["codigo"] in seen:
                 continue
-            seen.add(key)
+            seen.add(item["codigo"])
             results.append((score, extra_score, item))
     # Prioriza coincidencias con la consulta del cliente, luego las del servicio
     results.sort(key=lambda t: (-t[1], -t[0], t[2]["precio"]))
     return [item for _, _, item in results[:limit]]
 
 
-def _resolve_unit_mode(mode: str | None, items: list[dict]) -> str:
-    """Decide el modo de cantidad ("area"|"units"|"linear") cuando no se indica.
+# Modo de cantidad segun la unidad del APU
+_UNIT_MODE = {"M2": "area", "UN": "units", "ML": "linear", "ML2": "linear", "M3": "volume"}
+# Prioridad al resolver el modo cuando no se indica (desempate)
+_UNIT_PRIORITY = {"M2": 4, "UN": 3, "ML": 2, "M3": 1}
 
-    Si la consulta no aclara la unidad, se infiere por las actividades que
-    coinciden: M2 -> area, UN -> units, ML -> linear.
+
+def _resolve_unit_mode(mode: str | None, items: list[dict]) -> str:
+    """Decide el modo de cantidad ("area"|"units"|"linear"|"volume").
+
+    Si la consulta no aclara la unidad, se infiere de las actividades mas
+    relevantes (las que coinciden con el texto del cliente, que van primero
+    porque ``search_activities`` ordena por coincidencia).
     """
-    if mode in ("area", "units", "linear"):
+    if mode in ("area", "units", "linear", "volume"):
         return mode
-    units = {it["unidad"] for it in items}
-    if "M2" in units:
-        return "area"
-    if "UN" in units:
-        return "units"
-    if "ML" in units:
-        return "linear"
+    top = items[:4]
+    counts: dict[str, int] = {}
+    for it in top:
+        counts[it["unidad"]] = counts.get(it["unidad"], 0) + 1
+    if counts:
+        best = max(
+            counts.items(),
+            key=lambda kv: (kv[1], _UNIT_PRIORITY.get(kv[0], 0)),
+        )[0]
+        return _UNIT_MODE.get(best, "area")
     return "area"
+
+
+def _item_fits_mode(it: dict, mode: str) -> bool:
+    """Indica si una actividad puede cotizarse en el modo de cantidad activo.
+
+    Evita mezclar unidades: si el cliente pide m2 no se muestra el precio de
+    cerramientos por metro lineal ni de UN sin dimensiones; si pide unidades
+    no se muestran las tuberias por metro, etc.
+    """
+    u = it["unidad"]
+    if mode == "area":
+        return u == "M2" or (u == "UN" and parse_dimensions_m2(it["descripcion"]) is not None)
+    if mode == "units":
+        return u == "UN"
+    if mode == "linear":
+        return u in ("ML", "ML2")
+    if mode == "volume":
+        return u == "M3"
+    return True
 
 
 def quote(
@@ -214,6 +247,7 @@ def quote(
     """
     items = search_activities(service_key, query=query)
     mode = _resolve_unit_mode(unit, items)
+    items = [it for it in items if _item_fits_mode(it, mode)]
     computed = []
     for it in items:
         precio = round(it["precio"])
@@ -225,7 +259,11 @@ def quote(
             # La cantidad ya viene en m2
             units = cantidad
             subtotal = round(precio * cantidad)
-        elif it["unidad"] == "ML" or it["unidad"] == "ML2":
+        elif it["unidad"] == "M3":
+            # La cantidad viene en metros cubicos
+            units = cantidad
+            subtotal = round(precio * cantidad)
+        elif it["unidad"] in ("ML", "ML2"):
             # La cantidad viene en metros lineales
             units = cantidad
             subtotal = round(precio * cantidad)
@@ -264,7 +302,7 @@ def quote(
         "service_key": service_key,
         "cantidad": cantidad,
         "unit": mode,
-        "items": [],
+        "items": None,
         "min_total": 0,
         "max_total": 0,
         "has_prices": False,
@@ -280,6 +318,13 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
     """Arma el texto de cotizacion en prosa para enviar por WhatsApp."""
     result = quote(service_key, cantidad, query=query, unit=unit)
     if not result["has_prices"]:
+        if result["items"] is None:
+            # Hay actividades, pero ninguna cotizable en esa unidad (ej: pedir
+            # m2 de un registro que se vende por unidad)
+            return (
+                "En este servicio las actividades se cotizan por otra unidad "
+                "(unidades, metros lineales o m³), no por m². ¿Cuál necesitas?"
+            )
         return (
             "Todavía no tengo precios de referencia para este servicio en mi base de costos. "
             "Puedo dejar tus datos a un asesor para que te prepare una cotización formal."
@@ -290,6 +335,7 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
         "area": _cantidad_text(cantidad) + " m²",
         "units": _cantidad_text(cantidad) + " unid.",
         "linear": _cantidad_text(cantidad) + " ml",
+        "volume": _cantidad_text(cantidad) + " m³",
     }[mode]
 
     lines = [

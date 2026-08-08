@@ -63,13 +63,17 @@ INTENT_CANCEL = ("cancelar", "cancelacion", "dejarlo", "salir", "empezar de nuev
 
 
 AREA_PATTERNS = (
-    r"(\d+(?:[.,]\d+)?)\s*(?:mts?\s*cuadrados?|m2|m²|metros?\s*cuadrados?|mts|metros?)",
+    r"(\d+(?:[.,]\d+)?)\s*(?:mts?\s*cuadrados?|m2|m²|m3|m³|metros?\s*cubicos?|metros?\s*cuadrados?|mts|metros?)",
     r"(\d+(?:[.,]\d+)?)\s*(?:metros?)\b",
 )
 
 
 def _extract_area(text: str) -> float | None:
-    """Extrae el metraje (m2) de un mensaje, p.ej. '50 m2' -> 50.0."""
+    """Extrae una cantidad con unidad (m2, m3, ml, metros...) de un mensaje.
+
+    '50 m2' -> 50.0, '30 m3' -> 30.0, '20 metros' -> 20.0. La unidad en si la
+    decide ``_extract_unit_mode``; aqui solo importa el numero.
+    """
     text = text.lower().replace(",", ".")
     for pattern in AREA_PATTERNS:
         m = re.search(pattern, text)
@@ -93,14 +97,17 @@ def _bare_number(text: str) -> float | None:
 
 
 def _extract_unit_mode(text: str) -> str | None:
-    """Detecta si el usuario pide la cantidad en m2, ml o unidades.
+    """Detecta si el usuario pide la cantidad en m2, ml, m3 o unidades.
 
-    Se revisa en orden de prioridad: area, lineal, unidades. Debe ejecutarse
-    antes de detectar 'ventana'/'unidad' para que 'ventana por m2' sea area.
+    Se revisa en orden de prioridad: area, volumen, lineal, unidades. Debe
+    ejecutarse antes de detectar 'ventana'/'unidad' para que 'ventana por m2'
+    sea area.
     """
     t = normalize(text)
     if _has_any(t, ("m2", "m²", "metro cuadrado", "metros cuadrados", "metros cuadrado", "mt2")):
         return "area"
+    if _has_any(t, ("m3", "m³", "metro cubico", "metros cubicos")):
+        return "volume"
     if _has_any(t, ("metro lineal", "metros lineales", "lineal")) or re.search(r"\bml\b", t):
         return "linear"
     if _has_any(t, ("unidad", "unid", "ventana", "pieza", "piezas")):
