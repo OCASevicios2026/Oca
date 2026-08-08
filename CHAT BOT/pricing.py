@@ -493,10 +493,12 @@ def build_quote_text(service_key: str, cantidad: float, query: str | None = None
 
     # La opcion mas economica (por m² en area, por unidad en el resto)
     best = min(rows, key=lambda r: r[1])
-    per_unit = {"area": "m²", "units": "unid.", "linear": "ml", "volume": "m³"}[mode]
+    per_unit = {"area": "m²", "units": "unid", "linear": "ml", "volume": "m³"}[mode]
+    por = f" por {per_unit}" if mode == "area" else ""
     lines.append(
-        f"*La opción más económica por {per_unit} es la {best[0]}, "
-        f"con aprox. {format_cop(best[1])}/{per_unit}.*"
+        f"*La opción más económica{por} es la {best[0]}, con un valor aproximado "
+        f"de {format_cop(best[1])}/{per_unit}. Para {cantidad_label}, el subtotal "
+        f"estimado es de {format_cop(best[3])}.*"
     )
 
     nota = _rounding_note(result["items"], cantidad, mode)
@@ -517,7 +519,7 @@ def _quote_rows(result: dict, mode: str, cantidad: float) -> tuple[list, str, st
     """Filas de la tabla: (modelo, precio/m²|unid, cantidad, total) y cabeceras."""
     rows: list = []
     if mode == "area":
-        per_h, qty_h = "$/m²", "Cantidad"
+        per_h, qty_h = "Precio/m²", "Cantidad"
         for it in result["items"]:
             if it["unidad"] == "UN" and it.get("area_m2"):
                 # Ej: Ventana 5020 300x150 3H (4,5 m² c/u): para 20 m² -> 5 unid (22,5 m²)
@@ -529,7 +531,7 @@ def _quote_rows(result: dict, mode: str, cantidad: float) -> tuple[list, str, st
                 qty = _format_area(cantidad) + " m²"
             rows.append((it["descripcion"], per, qty, it["subtotal"]))
     else:
-        per_h = {"units": "$/unid", "linear": "$/ml", "volume": "$/m³"}[mode]
+        per_h = {"units": "Precio/unid", "linear": "Precio/ml", "volume": "Precio/m³"}[mode]
         qty_h = "Cantidad"
         unit_label = {"units": "unid", "linear": "ml", "volume": "m³"}[mode]
         for it in result["items"]:
@@ -538,16 +540,17 @@ def _quote_rows(result: dict, mode: str, cantidad: float) -> tuple[list, str, st
     return rows, per_h, qty_h
 
 
-def _build_table(rows: list, per_h: str, qty_h: str, total_h: str = "Total", max_model: int = 30) -> str:
-    """Tabla en monospace (bloque ``` de WhatsApp) alineando columnas con espacios."""
-    modelo_w = min(max(len(r[0]) for r in rows) + 2, max_model)
+def _build_table(rows: list, per_h: str, qty_h: str, total_h: str = "Subtotal") -> str:
+    """Tabla en monospace (bloque ``` de WhatsApp) alineando columnas con espacios.
+
+    Muestra el nombre completo del registro del CSV (sin truncar).
+    """
+    modelo_w = max(len(r[0]) for r in rows) + 2
     per_w = max(len(per_h), *(len(format_cop(r[1])) for r in rows))
     qty_w = max(len(qty_h), *(len(r[2]) for r in rows))
     tot_w = max(len(total_h), *(len(format_cop(r[3])) for r in rows))
 
     def row(modelo, per, qty, total):
-        if len(modelo) > max_model:
-            modelo = modelo[: max_model - 1] + "…"
         return (
             f"{modelo.ljust(modelo_w)}"
             f"{format_cop(per).rjust(per_w)}  "
