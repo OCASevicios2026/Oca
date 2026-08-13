@@ -764,6 +764,60 @@ footer {
 .cta-section .section-title { margin-bottom: 16px; }
 .cta-section p { font-size: 17px; color: var(--text-secondary); margin-bottom: 40px; }
 
+/* ============ BOTON DETALLE SERVICIO ============ */
+.apartado-detalle {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 14px;
+  font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;
+  color: var(--bg); background: linear-gradient(135deg, var(--primary), var(--accent));
+  border: none; border-radius: 100px; cursor: pointer;
+  padding: 10px 20px; transition: transform 0.25s, box-shadow 0.25s;
+}
+.apartado-detalle:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(37,99,235,0.3); }
+
+/* ============ MODAL DETALLE SERVICIO ============ */
+.servicio-modal-overlay {
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center;
+  background: rgba(11,17,32,0.75); backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity 0.3s ease; padding: 24px;
+}
+.servicio-modal-overlay.open { opacity: 1; }
+.servicio-modal {
+  position: relative; width: 100%; max-width: 900px; max-height: 90vh; overflow-y: auto;
+  background: #fff; border-radius: var(--radius); box-shadow: 0 32px 96px rgba(0,0,0,0.4);
+  transform: translateY(24px) scale(0.98); transition: transform 0.3s cubic-bezier(0.22,1,0.36,1);
+}
+.servicio-modal-overlay.open .servicio-modal { transform: none; }
+.servicio-modal-close {
+  position: absolute; top: 16px; right: 16px; z-index: 5; width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center; border: none; cursor: pointer;
+  background: rgba(11,17,32,0.7); color: #fff; border-radius: 50%;
+  backdrop-filter: blur(6px); transition: transform 0.25s, background 0.25s;
+}
+.servicio-modal-close:hover { transform: rotate(90deg); background: rgba(11,17,32,0.9); }
+.servicio-modal-close svg { width: 18px; height: 18px; }
+.servicio-modal-body { padding: 40px; }
+.servicio-modal-header { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 40px; align-items: center; margin-bottom: 40px; }
+.servicio-modal-header img {
+  width: 100%; border-radius: var(--radius); aspect-ratio: 4 / 3; object-fit: cover;
+  box-shadow: 0 24px 64px rgba(11,17,32,0.14);
+}
+.servicio-modal-heading .apartado-num { margin-bottom: 8px; }
+.servicio-modal-heading h3 { font-size: 34px; font-weight: 700; letter-spacing: -0.8px; margin-bottom: 12px; }
+.servicio-modal-heading .servicio-desc { margin-bottom: 0; }
+.servicio-modal-subs {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin-bottom: 40px;
+}
+.subservicio-card {
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius); overflow: hidden;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.subservicio-card:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(11,17,32,0.1); }
+.subservicio-card img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
+.subservicio-info { padding: 20px; }
+.subservicio-info h4 { font-size: 16px; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.3px; }
+.subservicio-info p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.servicio-modal-cta { text-align: center; }
+
 /* ============ RESPONSIVE ============ */
 @media (max-width: 1100px) {
   nav { height: 84px; }
@@ -893,6 +947,12 @@ footer {
   .apartado-content h3 { font-size: 22px; }
   .apartado-content li { font-size: 14px; }
   .menu-overlay-links a { font-size: 26px; }
+}
+
+@media (max-width: 640px) {
+  .servicio-modal-header { grid-template-columns: 1fr; gap: 24px; }
+  .servicio-modal-subs { grid-template-columns: 1fr; }
+  .servicio-modal-body { padding: 28px; }
 }
 
 @media (max-width: 360px) {
